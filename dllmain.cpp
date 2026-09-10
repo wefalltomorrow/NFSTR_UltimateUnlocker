@@ -1,80 +1,107 @@
 //
-// Need for Speed The Run - Ultimate Unlocker / Unlock All Things
-// by Xan / Tenjoin
+// Need for Speed The Run - Selective Promo/DLC Unlocker
+//
+// Based on NFSTR_UltimateUnlocker / "Unlock All Things" by Xan / Tenjoin.
+// This fork intentionally keeps normal progression intact: it does NOT force cars
+// unlocked, unlock stage select, or disable the generic Unlockers requirement list.
+//
+// The only active patches are the two original metadata patches that neutralize
+// IsPromoContent and IsHiddenUnlock. This is the smallest useful test for exposing
+// installed promotional / hidden DLC content without emulating a Time Saver pack.
 //
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#include <iostream>
-#include <thread>
+#include <cstdint>
+#include <cstring>
+
 #include "includes/injector/injector.hpp"
-#include "includes/injector/assembly.hpp"
 
-// int retZeroInt()
-// {
-// 	return 0;
-// }
-
-void Init()
+namespace
 {
-	injector::MakeNOP(0x834303, 2);
-	injector::MakeNOP(0x83434F, 2);
+    constexpr uintptr_t kPreferredImageBase = 0x00400000;
 
-	injector::WriteMemory<uint8_t>(0x25A35EC, 0, true);
-	injector::WriteMemory<uint8_t>(0x25A362D, 0, true);
-	injector::WriteMemory<uint8_t>(0x25A363D, 0, true);
+    // String addresses in the supported DRM-free v1.1.0.0 executable.
+    // Xan's original code zeroed the final character of these names:
+    //   IsPromoContent  -> IsPromoConten
+    //   IsHiddenUnlock  -> IsHiddenUnloc
+    constexpr uintptr_t kIsPromoContentVA = 0x025A3620;
+    constexpr uintptr_t kIsHiddenUnlockVA = 0x025A3630;
 
-	uintptr_t loc_93E00D = 0x93E00D;
-	struct CarUnlockHook1
-	{
-		void operator()(injector::reg_pack& regs)
-		{
-			*(uint8_t*)(regs.ecx + 0x18) = 1;
-		}
-	}; injector::MakeInline<CarUnlockHook1>(loc_93E00D, loc_93E00D + 6);
-	injector::MakeJMP(loc_93E00D + 6, 0x93E0D8);
+    uintptr_t RebaseGameAddress(uintptr_t preferredVA)
+    {
+        const uintptr_t gameBase = reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr));
+        return gameBase + (preferredVA - kPreferredImageBase);
+    }
 
-	uintptr_t loc_93F214 = 0x93F214;
-	struct CarUnlockHook2
-	{
-		void operator()(injector::reg_pack& regs)
-		{
-			*(uint8_t*)(regs.ebp + 0x18) = 1;
-		}
-	}; injector::MakeInline<CarUnlockHook2>(loc_93F214, loc_93F214 + 6);
-	injector::MakeJMP(loc_93F214 + 6, 0x93F2A0);
+    bool IsReadableRange(const void* address, size_t size)
+    {
+        MEMORY_BASIC_INFORMATION mbi{};
+        if (!VirtualQuery(address, &mbi, sizeof(mbi)))
+            return false;
 
-	// stage select unlock
-	injector::MakeNOP(0x930C00, 2);
-	injector::MakeNOP(0x9313A2, 2);
+        if (mbi.State != MEM_COMMIT)
+            return false;
 
-	// other modifications done by ALI (disables online?)
-	// injector::MakeNOP(0xDD76CB, 2); // something with network?
-	// Ebisu / Autolog stuff
-	// injector::MakeJMP(0x018AEF80, retZeroInt);
-	// injector::MakeJMP(0x018AF060, retZeroInt);
-	// injector::MakeJMP(0x018AF0E0, retZeroInt);
-	// injector::MakeJMP(0x018AF160, retZeroInt);
-	// injector::MakeJMP(0x018AF1E0, retZeroInt);
-	// injector::MakeJMP(0x018AF260, retZeroInt);
-	// injector::MakeJMP(0x018AF2D0, retZeroInt);
-	// injector::MakeJMP(0x018AF340, retZeroInt);
-	// injector::MakeJMP(0x018AF3A0, retZeroInt);
-	// injector::MakeJMP(0x018AF3A0, retZeroInt);
-	// injector::MakeJMP(0x018AF420, retZeroInt);
-	// injector::MakeJMP(0x018AF460, retZeroInt);
-	// injector::MakeJMP(0x018AF4A0, retZeroInt);
-	// injector::MakeJMP(0x018AF520, retZeroInt);
-	// injector::MakeJMP(0x018AF5B0, retZeroInt);
-	// injector::MakeJMP(0x018AF640, retZeroInt);
+        if ((mbi.Protect & PAGE_GUARD) || (mbi.Protect & PAGE_NOACCESS))
+            return false;
 
+        const uintptr_t begin = reinterpret_cast<uintptr_t>(address);
+        const uintptr_t end = begin + size;
+        const uintptr_t regionEnd = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
+        return end >= begin && end <= regionEnd;
+    }
+
+    bool NeutralizeReflectedBoolField(uintptr_t preferredStringVA, const char* expectedName)
+    {
+        const size_t length = std::strlen(expectedName);
+        char* const liveString = reinterpret_cast<char*>(RebaseGameAddress(preferredStringVA));
+
+        // Refuse to patch an unexpected executable. The original mod wrote to fixed
+        // addresses unconditionally; this fork verifies the full field name first.
+        if (!IsReadableRange(liveString, length + 1))
+            return false;
+
+        if (std::memcmp(liveString, expectedName, length + 1) != 0)
+            return false;
+
+        injector::WriteMemory<uint8_t>(
+            reinterpret_cast<uintptr_t>(liveString + length - 1),
+            0,
+            true);
+
+        return true;
+    }
+
+    void Init()
+    {
+        // Keep only the two targeted promo/hidden-content patches from the original
+        // Ultimate Unlocker. Normal car/stage/progression checks are left untouched.
+        const bool promoPatched = NeutralizeReflectedBoolField(
+            kIsPromoContentVA,
+            "IsPromoContent");
+
+        const bool hiddenPatched = NeutralizeReflectedBoolField(
+            kIsHiddenUnlockVA,
+            "IsHiddenUnlock");
+
+        if (promoPatched && hiddenPatched)
+        {
+            OutputDebugStringA(
+                "[NFSTR_SelectiveUnlocker] Promo/hidden content metadata patches applied.\n");
+        }
+        else
+        {
+            OutputDebugStringA(
+                "[NFSTR_SelectiveUnlocker] Patch verification failed; unsupported or modified executable.\n");
+        }
+    }
 }
 
 BOOL APIENTRY DllMain(HMODULE /*hModule*/, DWORD reason, LPVOID /*lpReserved*/)
 {
-	if (reason == DLL_PROCESS_ATTACH)
-	{
-		Init();
-	}
-	return TRUE;
+    if (reason == DLL_PROCESS_ATTACH)
+        Init();
+
+    return TRUE;
 }
