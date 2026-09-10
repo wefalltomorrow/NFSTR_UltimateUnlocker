@@ -1,100 +1,133 @@
 //
-// Need for Speed The Run - Selective Promo/DLC Unlocker
+// Need for Speed The Run - Selective Promo/DLC Unlocker (test 2)
 //
-// Based on NFSTR_UltimateUnlocker / "Unlock All Things" by Xan / Tenjoin.
-// This fork intentionally keeps normal progression intact: it does NOT force cars
-// unlocked, unlock stage select, or disable the generic Unlockers requirement list.
-//
-// The only active patches are the two original metadata patches that neutralize
-// IsPromoContent and IsHiddenUnlock. This is the smallest useful test for exposing
-// installed promotional / hidden DLC content without emulating a Time Saver pack.
+// Experimental build: keep normal progression intact, but conditionally mark
+// garage cars unlocked only when the game's own Unlockable metadata says the
+// entry is promotional content. This tests whether m_isPromoContent is a useful
+// discriminator for DLC/promo cars without using the broad Unlockers bypass or
+// Xan's unconditional car/stage unlock patches.
 //
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <cstdint>
-#include <cstring>
+#include <cstdio>
 
 #include "includes/injector/injector.hpp"
+#include "includes/patterns.hpp"
 
 namespace
 {
-    constexpr uintptr_t kPreferredImageBase = 0x00400000;
-
-    // String addresses in the supported DRM-free v1.1.0.0 executable.
-    // Xan's original code zeroed the final character of these names:
-    //   IsPromoContent  -> IsPromoConten
-    //   IsHiddenUnlock  -> IsHiddenUnloc
-    constexpr uintptr_t kIsPromoContentVA = 0x025A3620;
-    constexpr uintptr_t kIsHiddenUnlockVA = 0x025A3630;
-
-    uintptr_t RebaseGameAddress(uintptr_t preferredVA)
+    struct Unlockable
     {
-        const uintptr_t gameBase = reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr));
-        return gameBase + (preferredVA - kPreferredImageBase);
+        uint8_t pad[0x18];
+        bool m_isUnlocked;
+        bool m_hideHowTo;
+        bool m_isHiddenUnlock;
+        bool m_isPromoContent;
+    };
+
+    using GetMatchingGarageCarFn = Unlockable* (__cdecl *)(uint32_t attribSysClassKey,
+                                                            uint32_t attribSysCollectionKey);
+
+    GetMatchingGarageCarFn g_GetMatchingGarageCar = nullptr;
+
+    void AppendLog(const char* fmt, ...)
+    {
+        char buffer[512]{};
+        va_list args;
+        va_start(args, fmt);
+        _vsnprintf_s(buffer, sizeof(buffer), _TRUNCATE, fmt, args);
+        va_end(args);
+
+        HANDLE h = CreateFileA("NFSTR_SelectiveUnlocker_test2.log",
+                               FILE_APPEND_DATA,
+                               FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               nullptr,
+                               OPEN_ALWAYS,
+                               FILE_ATTRIBUTE_NORMAL,
+                               nullptr);
+        if (h == INVALID_HANDLE_VALUE)
+            return;
+
+        DWORD written = 0;
+        WriteFile(h, buffer, static_cast<DWORD>(strlen(buffer)), &written, nullptr);
+        CloseHandle(h);
     }
 
-    bool IsReadableRange(const void* address, size_t size)
+    Unlockable* __cdecl GetMatchingGarageCarHook(uint32_t attribSysClassKey,
+                                                  uint32_t attribSysCollectionKey)
     {
-        MEMORY_BASIC_INFORMATION mbi{};
-        if (!VirtualQuery(address, &mbi, sizeof(mbi)))
-            return false;
+        Unlockable* car = g_GetMatchingGarageCar
+            ? g_GetMatchingGarageCar(attribSysClassKey, attribSysCollectionKey)
+            : nullptr;
 
-        if (mbi.State != MEM_COMMIT)
-            return false;
+        if (!car)
+            return car;
 
-        if ((mbi.Protect & PAGE_GUARD) || (mbi.Protect & PAGE_NOACCESS))
-            return false;
+        const bool wasUnlocked = car->m_isUnlocked;
+        const bool hidden = car->m_isHiddenUnlock;
+        const bool promo = car->m_isPromoContent;
 
-        const uintptr_t begin = reinterpret_cast<uintptr_t>(address);
-        const uintptr_t end = begin + size;
-        const uintptr_t regionEnd = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
-        return end >= begin && end <= regionEnd;
-    }
+        // TEST 2: use only the game's own promo flag as the discriminator.
+        // Do not use m_isHiddenUnlock yet; hidden may include non-DLC rewards.
+        if (!car->m_isUnlocked && promo)
+            car->m_isUnlocked = true;
 
-    bool NeutralizeReflectedBoolField(uintptr_t preferredStringVA, const char* expectedName)
-    {
-        const size_t length = std::strlen(expectedName);
-        char* const liveString = reinterpret_cast<char*>(RebaseGameAddress(preferredStringVA));
+        // Log the attribute keys and all four adjacent Unlockable flags. This gives
+        // us evidence for the next step without changing non-promo progression.
+        AppendLog("class=%08X collection=%08X unlocked:%u->%u hideHowTo=%u hidden=%u promo=%u\r\n",
+                  attribSysClassKey,
+                  attribSysCollectionKey,
+                  wasUnlocked ? 1u : 0u,
+                  car->m_isUnlocked ? 1u : 0u,
+                  car->m_hideHowTo ? 1u : 0u,
+                  hidden ? 1u : 0u,
+                  promo ? 1u : 0u);
 
-        // Refuse to patch an unexpected executable. The original mod wrote to fixed
-        // addresses unconditionally; this fork verifies the full field name first.
-        if (!IsReadableRange(liveString, length + 1))
-            return false;
-
-        if (std::memcmp(liveString, expectedName, length + 1) != 0)
-            return false;
-
-        injector::WriteMemory<uint8_t>(
-            reinterpret_cast<uintptr_t>(liveString + length - 1),
-            0,
-            true);
-
-        return true;
+        return car;
     }
 
     void Init()
     {
-        // Keep only the two targeted promo/hidden-content patches from the original
-        // Ultimate Unlocker. Normal car/stage/progression checks are left untouched.
-        const bool promoPatched = NeutralizeReflectedBoolField(
-            kIsPromoContentVA,
-            "IsPromoContent");
+        DeleteFileA("NFSTR_SelectiveUnlocker_test2.log");
+        AppendLog("NFSTR Selective Unlocker test 2\r\n");
+        AppendLog("Mode: unlock matching garage cars only when m_isPromoContent == true\r\n");
+        AppendLog("No Unlockers bypass; no stage unlock; no online/Ebisu patches.\r\n\r\n");
 
-        const bool hiddenPatched = NeutralizeReflectedBoolField(
-            kIsHiddenUnlockVA,
-            "IsHiddenUnlock");
+        pattern::Win32::Init();
+        if (!pattern::Win32::bIsInited())
+        {
+            AppendLog("ERROR: pattern scanner failed to initialise.\r\n");
+            return;
+        }
 
-        if (promoPatched && hiddenPatched)
+        // Same call path FusionFix uses to locate NFSUIVehicleComp::getMatchingGarageCar.
+        // Hook only this caller so the original function remains available as a clean
+        // trampoline target and normal game logic still runs first.
+        const uintptr_t callSite = pattern::get_first(
+            "E8 ? ? ? ? 83 C4 ? 80 7C 24 ? ? 74 ? 80 78");
+
+        if (!callSite)
         {
-            OutputDebugStringA(
-                "[NFSTR_SelectiveUnlocker] Promo/hidden content metadata patches applied.\n");
+            AppendLog("ERROR: getMatchingGarageCar call pattern not found.\r\n");
+            return;
         }
-        else
+
+        g_GetMatchingGarageCar = reinterpret_cast<GetMatchingGarageCarFn>(
+            static_cast<uintptr_t>(injector::GetBranchDestination(callSite)));
+
+        if (!g_GetMatchingGarageCar)
         {
-            OutputDebugStringA(
-                "[NFSTR_SelectiveUnlocker] Patch verification failed; unsupported or modified executable.\n");
+            AppendLog("ERROR: could not resolve original getMatchingGarageCar target.\r\n");
+            return;
         }
+
+        injector::MakeCALL(callSite, GetMatchingGarageCarHook, true);
+
+        AppendLog("Hook installed at %08X; original target %08X.\r\n",
+                  static_cast<unsigned>(callSite),
+                  static_cast<unsigned>(reinterpret_cast<uintptr_t>(g_GetMatchingGarageCar)));
     }
 }
 
