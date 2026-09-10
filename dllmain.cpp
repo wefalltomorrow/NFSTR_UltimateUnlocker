@@ -12,6 +12,8 @@
 #include <windows.h>
 #include <cstdint>
 #include <cstdio>
+#include <cstdarg>
+#include <cstring>
 
 #include "includes/injector/injector.hpp"
 #include "includes/patterns.hpp"
@@ -51,7 +53,7 @@ namespace
             return;
 
         DWORD written = 0;
-        WriteFile(h, buffer, static_cast<DWORD>(strlen(buffer)), &written, nullptr);
+        WriteFile(h, buffer, static_cast<DWORD>(std::strlen(buffer)), &written, nullptr);
         CloseHandle(h);
     }
 
