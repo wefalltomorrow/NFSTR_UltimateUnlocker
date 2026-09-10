@@ -6,6 +6,7 @@ on:
       - master
       - selective-promo-dlc
       - selective-promo-dlc-test2
+      - selective-promo-dlc-test3
   pull_request:
   workflow_dispatch:
 
@@ -36,10 +37,10 @@ jobs:
             throw 'Release NFSTR_UltimateUnlocker.asi was not produced.'
           }
 
-          $outName = if ($env:GITHUB_REF_NAME -eq 'selective-promo-dlc-test2') {
-            'NFSTR_SelectiveUnlocker_test2.asi'
-          } else {
-            'NFSTR_SelectiveUnlocker.asi'
+          $outName = switch ($env:GITHUB_REF_NAME) {
+            'selective-promo-dlc-test2' { 'NFSTR_SelectiveUnlocker_test2.asi' }
+            'selective-promo-dlc-test3' { 'NFSTR_SelectiveUnlocker_test3.asi' }
+            default { 'NFSTR_SelectiveUnlocker.asi' }
           }
 
           Copy-Item $asi.FullName "$env:GITHUB_WORKSPACE\$outName" -Force
