@@ -7,6 +7,7 @@ on:
       - selective-promo-dlc
       - selective-promo-dlc-test2
       - selective-promo-dlc-test3
+      - selective-promo-dlc-test4
   pull_request:
   workflow_dispatch:
 
@@ -40,6 +41,7 @@ jobs:
           $outName = switch ($env:GITHUB_REF_NAME) {
             'selective-promo-dlc-test2' { 'NFSTR_SelectiveUnlocker_test2.asi' }
             'selective-promo-dlc-test3' { 'NFSTR_SelectiveUnlocker_test3.asi' }
+            'selective-promo-dlc-test4' { 'NFSTR_SelectiveUnlocker_test4.asi' }
             default { 'NFSTR_SelectiveUnlocker.asi' }
           }
 
