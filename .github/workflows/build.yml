@@ -1,0 +1,52 @@
+name: Build selective ASI
+
+on:
+  push:
+    branches:
+      - master
+      - selective-promo-dlc
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build Release x86
+        shell: pwsh
+        run: |
+          msbuild .\NFSTR_UltimateUnlocker.sln /m /p:Configuration=Release /p:Platform=x86
+
+      - name: Collect ASI
+        shell: pwsh
+        run: |
+          $asi = Get-ChildItem -Path $env:GITHUB_WORKSPACE -Recurse -Filter NFSTR_UltimateUnlocker.asi |
+            Where-Object { $_.FullName -match '[\\/]Release[\\/]' } |
+            Select-Object -First 1
+
+          if (-not $asi) {
+            throw 'Release NFSTR_UltimateUnlocker.asi was not produced.'
+          }
+
+          Copy-Item $asi.FullName "$env:GITHUB_WORKSPACE\NFSTR_SelectiveUnlocker.asi" -Force
+          $hash = (Get-FileHash "$env:GITHUB_WORKSPACE\NFSTR_SelectiveUnlocker.asi" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  NFSTR_SelectiveUnlocker.asi" | Set-Content "$env:GITHUB_WORKSPACE\NFSTR_SelectiveUnlocker.sha256.txt"
+
+          Write-Host "Built: $($asi.FullName)"
+          Write-Host "SHA-256: $hash"
+
+      - name: Upload ASI
+        uses: actions/upload-artifact@v4
+        with:
+          name: NFSTR-SelectiveUnlocker
+          path: |
+            NFSTR_SelectiveUnlocker.asi
+            NFSTR_SelectiveUnlocker.sha256.txt
+          if-no-files-found: error
