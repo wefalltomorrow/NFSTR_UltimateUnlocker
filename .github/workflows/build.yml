@@ -5,6 +5,7 @@ on:
     branches:
       - master
       - selective-promo-dlc
+      - selective-promo-dlc-test2
   pull_request:
   workflow_dispatch:
 
@@ -35,18 +36,26 @@ jobs:
             throw 'Release NFSTR_UltimateUnlocker.asi was not produced.'
           }
 
-          Copy-Item $asi.FullName "$env:GITHUB_WORKSPACE\NFSTR_SelectiveUnlocker.asi" -Force
-          $hash = (Get-FileHash "$env:GITHUB_WORKSPACE\NFSTR_SelectiveUnlocker.asi" -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  NFSTR_SelectiveUnlocker.asi" | Set-Content "$env:GITHUB_WORKSPACE\NFSTR_SelectiveUnlocker.sha256.txt"
+          $outName = if ($env:GITHUB_REF_NAME -eq 'selective-promo-dlc-test2') {
+            'NFSTR_SelectiveUnlocker_test2.asi'
+          } else {
+            'NFSTR_SelectiveUnlocker.asi'
+          }
 
+          Copy-Item $asi.FullName "$env:GITHUB_WORKSPACE\$outName" -Force
+          $hash = (Get-FileHash "$env:GITHUB_WORKSPACE\$outName" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $outName" | Set-Content "$env:GITHUB_WORKSPACE\$outName.sha256.txt"
+
+          "OUT_NAME=$outName" | Out-File -FilePath $env:GITHUB_ENV -Append
           Write-Host "Built: $($asi.FullName)"
+          Write-Host "Output: $outName"
           Write-Host "SHA-256: $hash"
 
       - name: Upload ASI
         uses: actions/upload-artifact@v4
         with:
-          name: NFSTR-SelectiveUnlocker
+          name: NFSTR-SelectiveUnlocker-${{ github.ref_name }}
           path: |
-            NFSTR_SelectiveUnlocker.asi
-            NFSTR_SelectiveUnlocker.sha256.txt
+            ${{ env.OUT_NAME }}
+            ${{ env.OUT_NAME }}.sha256.txt
           if-no-files-found: error
