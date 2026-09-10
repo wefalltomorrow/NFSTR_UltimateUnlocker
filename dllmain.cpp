@@ -1,13 +1,18 @@
 //
-// Need for Speed The Run - Selective Promo/DLC Unlocker (test 3)
+// Need for Speed The Run - Selective Promo/DLC Unlocker (test 4)
 //
-// Test 3 combines the two useful findings from the earlier experiments:
-//   1) neutralising IsPromoContent / IsHiddenUnlock exposes hidden promo/DLC UI,
-//   2) garage cars are only forced unlocked when their own m_isPromoContent flag is true.
+// Test 3 proved the promo/hidden reflection patches expose DLC/promo content,
+// but its diagnostic garage hook was installed at only one caller. The Test 3
+// log showed that caller never ran while browsing View Cars.
 //
-// Normal progression remains intentionally untouched. This build does NOT bypass
-// the generic Unlockers requirement list, unlock stage select, force every car
-// unlocked, or apply any online/Ebisu patches.
+// Test 4 keeps the proven visibility behaviour and redirects every known
+// EXTERNAL direct caller of NFSUIVehicleComp::getMatchingGarageCar to the same
+// selective wrapper. This lets View Cars and the other garage paths report the
+// real Unlockable flags instead of observing only one unrelated call site.
+//
+// Normal progression remains intentionally untouched. There is still NO generic
+// Unlockers bypass, NO stage-select unlock, NO blanket car unlock, and NO
+// online/Ebisu patching.
 //
 
 #define WIN32_LEAN_AND_MEAN
@@ -23,11 +28,24 @@
 namespace
 {
     constexpr uintptr_t kPreferredImageBase = 0x00400000;
-
-    // Reflected field-name strings in the supported DRM-free v1.1.0.0 EXE.
-    // Xan's original unlocker null-terminated the final character of each name.
     constexpr uintptr_t kIsPromoContentVA = 0x025A3620;
     constexpr uintptr_t kIsHiddenUnlockVA = 0x025A3630;
+
+    // Direct calls to getMatchingGarageCar in the supported DRM-free v1.1 EXE.
+    // 0x00932437 is deliberately excluded because it is inside/adjacent to the
+    // target routine and redirecting it could recurse through our wrapper.
+    constexpr uintptr_t kGarageCallSites[] = {
+        0x008848ED,
+        0x00885E34,
+        0x00894A13,
+        0x0093C4DC,
+        0x0093C659,
+        0x0093C805,
+        0x0093D17F,
+        0x0093D612,
+        0x0093D714,
+        0x0093F199,
+    };
 
     struct Unlockable
     {
@@ -75,7 +93,7 @@ namespace
         _vsnprintf_s(buffer, sizeof(buffer), _TRUNCATE, fmt, args);
         va_end(args);
 
-        HANDLE h = CreateFileA("NFSTR_SelectiveUnlocker_test3.log",
+        HANDLE h = CreateFileA("NFSTR_SelectiveUnlocker_test4.log",
                                FILE_APPEND_DATA,
                                FILE_SHARE_READ | FILE_SHARE_WRITE,
                                nullptr,
@@ -129,9 +147,9 @@ namespace
         const bool hidden = car->m_isHiddenUnlock;
         const bool promo = car->m_isPromoContent;
 
-        // Selective vehicle-side experiment: promo cars only. Do not use
-        // m_isHiddenUnlock as an unlock condition because normal progression rewards
-        // may also be hidden until earned.
+        // Keep this deliberately narrow. If the visibility reflection patch has
+        // caused m_isPromoContent to stop being populated, the log will prove it;
+        // do NOT compensate by broadly unlocking hidden/progression rewards.
         if (!car->m_isUnlocked && promo)
             car->m_isUnlocked = true;
 
@@ -149,18 +167,15 @@ namespace
 
     void Init()
     {
-        DeleteFileA("NFSTR_SelectiveUnlocker_test3.log");
-        AppendLog("NFSTR Selective Unlocker test 3\r\n");
+        DeleteFileA("NFSTR_SelectiveUnlocker_test4.log");
+        AppendLog("NFSTR Selective Unlocker test 4\r\n");
         AppendLog("Visibility: neutralise IsPromoContent + IsHiddenUnlock reflection names\r\n");
-        AppendLog("Cars: unlock only when m_isPromoContent == true\r\n");
+        AppendLog("Cars: hook all known external getMatchingGarageCar callers; unlock promo=true only\r\n");
         AppendLog("No generic Unlockers bypass; no stage unlock; no online/Ebisu patches.\r\n\r\n");
 
-        // Restore the visibility behaviour proven by Test 1. These patches expose
-        // promo/hidden content but do not themselves satisfy entitlement checks.
         const bool promoPatched = NeutralizeReflectedBoolField(
             kIsPromoContentVA,
             "IsPromoContent");
-
         const bool hiddenPatched = NeutralizeReflectedBoolField(
             kIsHiddenUnlockVA,
             "IsHiddenUnlock");
@@ -176,18 +191,18 @@ namespace
             return;
         }
 
-        // Same NFSUIVehicleComp::getMatchingGarageCar caller used by FusionFix.
-        const uintptr_t callSite = pattern::get_first(
+        // Resolve the original target from the same signature used by FusionFix.
+        const uintptr_t anchorCall = pattern::get_first(
             "E8 ? ? ? ? 83 C4 ? 80 7C 24 ? ? 74 ? 80 78");
-
-        if (!callSite)
+        if (!anchorCall)
         {
-            AppendLog("ERROR: getMatchingGarageCar call pattern not found.\r\n");
+            AppendLog("ERROR: getMatchingGarageCar anchor pattern not found.\r\n");
             return;
         }
 
-        g_GetMatchingGarageCar = reinterpret_cast<GetMatchingGarageCarFn>(
-            static_cast<uintptr_t>(injector::GetBranchDestination(callSite)));
+        const uintptr_t originalTarget =
+            static_cast<uintptr_t>(injector::GetBranchDestination(anchorCall));
+        g_GetMatchingGarageCar = reinterpret_cast<GetMatchingGarageCarFn>(originalTarget);
 
         if (!g_GetMatchingGarageCar)
         {
@@ -195,22 +210,51 @@ namespace
             return;
         }
 
-        injector::MakeCALL(callSite, GetMatchingGarageCarHook, true);
-
-        AppendLog("garage hook installed at %08X; original target %08X\r\n",
-                  static_cast<unsigned>(callSite),
-                  static_cast<unsigned>(reinterpret_cast<uintptr_t>(g_GetMatchingGarageCar)));
-
-        if (promoPatched && hiddenPatched)
+        unsigned patchedCalls = 0;
+        for (const uintptr_t preferredCallVA : kGarageCallSites)
         {
-            OutputDebugStringA(
-                "[NFSTR_SelectiveUnlocker_test3] Promo/DLC visibility + selective promo-car hook applied.\n");
+            const uintptr_t callSite = RebaseGameAddress(preferredCallVA);
+            if (!IsReadableRange(reinterpret_cast<const void*>(callSite), 5))
+            {
+                AppendLog("caller %08X skipped: unreadable\r\n",
+                          static_cast<unsigned>(preferredCallVA));
+                continue;
+            }
+
+            const uint8_t opcode = *reinterpret_cast<const uint8_t*>(callSite);
+            if (opcode != 0xE8)
+            {
+                AppendLog("caller %08X skipped: opcode=%02X, expected E8\r\n",
+                          static_cast<unsigned>(preferredCallVA), opcode);
+                continue;
+            }
+
+            const uintptr_t destination =
+                static_cast<uintptr_t>(injector::GetBranchDestination(callSite));
+            if (destination != originalTarget)
+            {
+                AppendLog("caller %08X skipped: target=%08X expected=%08X\r\n",
+                          static_cast<unsigned>(preferredCallVA),
+                          static_cast<unsigned>(destination),
+                          static_cast<unsigned>(originalTarget));
+                continue;
+            }
+
+            injector::MakeCALL(callSite, GetMatchingGarageCarHook, true);
+            ++patchedCalls;
+            AppendLog("caller %08X hooked\r\n", static_cast<unsigned>(preferredCallVA));
         }
-        else
-        {
-            OutputDebugStringA(
-                "[NFSTR_SelectiveUnlocker_test3] Visibility patch verification failed; check supported EXE.\n");
-        }
+
+        AppendLog("garage original target=%08X; external callers hooked=%u/%u\r\n",
+                  static_cast<unsigned>(originalTarget),
+                  patchedCalls,
+                  static_cast<unsigned>(sizeof(kGarageCallSites) / sizeof(kGarageCallSites[0])));
+
+        if (patchedCalls == 0)
+            AppendLog("ERROR: no garage callers were hooked.\r\n");
+
+        OutputDebugStringA(
+            "[NFSTR_SelectiveUnlocker_test4] Visibility patches + multi-caller garage diagnostics installed.\n");
     }
 }
 
