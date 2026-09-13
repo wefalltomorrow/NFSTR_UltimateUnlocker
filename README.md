@@ -1,39 +1,54 @@
 # NFS The Run - Selective Promo/DLC Unlocker
 
-A selective fork of [xan1242/NFSTR_UltimateUnlocker](https://github.com/xan1242/NFSTR_UltimateUnlocker) for **Need for Speed: The Run v1.1.0.0 (DRM-free executable)**.
+A selective fork of [xan1242/NFSTR_UltimateUnlocker](https://github.com/xan1242/NFSTR_UltimateUnlocker) for **Need for Speed: The Run v1.1.0.0**.
 
-## Goal
+## What it does
 
-Expose installed promotional / hidden DLC content **without** turning the game into a Time Saver / unlock-everything build.
+This build exposes installed hidden/promo content and satisfies only the known discontinued DLC/promo ownership entitlements needed by that content.
 
-The test branch intentionally preserves normal progression:
+It is deliberately **not** an unlock-everything or Time Savers mod. Normal progression remains authoritative.
 
-- **No forced car unlocks**
-- **No stage / Challenge Series unlock bypasses**
-- **No generic `Unlockers` requirement bypass**
-- **No Time Saver-style all-content unlock**
-- **No online / Autolog patches enabled**
+### Granted content ownership offers
 
-The only active patches are the two metadata changes inherited from the original Ultimate Unlocker that neutralize:
+- `r_carbon`
+- `r_mostwanted`
+- `r_underground`
+- `handv_pack`
+- `supercar_pack`
+- `dp_fordgt`
+- `dp_chevrolet`
+- `dp_porsche`
+- `os_pack`
+- `aem_adsales`
 
-- `IsPromoContent`
-- `IsHiddenUnlock`
+### Left untouched
 
-This is intentionally narrow so we can verify whether those two flags alone expose the legitimate promo/DLC content the user wants while ordinary cars, stages and progression remain locked normally.
+- Garage purchases and ordinary car unlock progression
+- Driver level requirements
+- Stage / career progression
+- Challenge medal requirements
+- Boss / story rewards
+- Multiplayer objective rewards
+- Autolog recommendation rewards
+- Time Savers
+- XP/profile grants
+- VIP/demo flags
+- `olp_*` online-pass entitlements
+- Generic `Unlockers[]` processing
+- Broad car/stage unlock patches
+- Ebisu / Autolog network patches
 
-## Why the original broad unlock patches were removed
+The implementation identifies the exact `OnlineUnlocker` subtype and only grants the allow-listed content offers above. Derived `GaragePurchaseUnlocker` objects and all unrelated entitlements execute the game's original logic.
 
-The original plugin contains several independent patch families. The broad progression-changing ones are deliberately excluded here:
+## Visibility
 
-- `CarUnlockHook1` / `CarUnlockHook2` force a garage car's unlocked byte to `1`.
-- The two `stage select unlock` NOPs bypass stage-selection locks.
-- Corrupting the reflected `Unlockers` property disables generic unlock requirements; FusionFix independently implements its `UnlockEverything` option by intercepting this same `Unlockers` property.
-
-See [`RESEARCH.md`](RESEARCH.md) for the complete patch map, including the commented Ebisu / Autolog / network code.
+The plugin also preserves the proven Ultimate Unlocker visibility behavior by neutralizing the reflected `IsPromoContent` and `IsHiddenUnlock` property names. This makes installed promotional/DLC entries visible without globally satisfying their progression requirements.
 
 ## Installation
 
-Build or download `NFSTR_SelectiveUnlocker.asi` and place it in the game's ASI-loaded plugins/scripts location. Do **not** run the original `NFSTR_UltimateUnlocker.asi` at the same time.
+Place `NFSTR_SelectiveUnlocker.asi` in the game's ASI-loaded plugins/scripts location.
+
+Do **not** load the original `NFSTR_UltimateUnlocker.asi` at the same time.
 
 If using NFS The Run FusionFix, keep its broad unlock options disabled if you want normal progression:
 
@@ -44,6 +59,21 @@ UnlockChallenges = 0
 UnlockEverything = 0
 ```
 
-## Status
+## Validation
 
-This branch is a targeted **test build**. The next check is simple: verify that desired promo/DLC cars/content appear, while ordinary progression-locked cars, tracks/stages and Challenge Series entries remain locked until earned.
+The production behavior was validated against the test 8 build. Confirmed examples include:
+
+- Limited Edition ownership content available
+- Underground / Most Wanted / Carbon / Old Spice / AEM content exposed as intended
+- Limited Edition reward cars still requiring their Challenge Series medals
+- Driver Level 18 BMW still locked until level requirement is met
+- Cesar DeLeon reward still locked until the boss requirement is met
+- Multiplayer and Autolog reward cars still obeying their original requirements
+- Time Savers excluded
+- `olp_*` online-pass entitlements excluded
+
+## Definitive Edition integration
+
+This ASI is the standalone production form of the selective unlocker. The implementation is intentionally narrow and self-contained so the same logic can later be integrated into the **Need for Speed: The Run Definitive Edition** patch rather than shipping as a separate user-facing component.
+
+See [`RESEARCH.md`](RESEARCH.md) for the reverse-engineering notes and original patch map.
