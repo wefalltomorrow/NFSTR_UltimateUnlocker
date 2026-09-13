@@ -1,26 +1,29 @@
 //
-// Need for Speed The Run - Selective Promo/DLC Unlocker (test 8)
+// Need for Speed: The Run - Selective Promo/DLC Unlocker
 //
-// Test 7 visually achieved the intended selective behavior: DLC/promo Challenge
-// Series and ownership-gated cars became available while normal level, boss,
-// challenge-medal, multiplayer-objective and Autolog requirements remained
-// locked.  Test 8 tightens the allow-list one step further by removing the
-// suspicious olp_le_free entitlement.  The "olp" family is an online-pass
-// control, not content ownership, so it should follow the original game logic.
+// Production implementation derived from the validated test 8 behavior.
 //
-// Only exact OnlineUnlocker objects with known discontinued content OfferIds are
-// granted.  GaragePurchaseUnlocker and all other OnlineUnlocker offers execute
-// the original game method through a trampoline.
+// Purpose:
+//   * expose installed hidden/promo content;
+//   * satisfy only known discontinued DLC/promo ownership entitlements;
+//   * preserve the game's normal progression and reward requirements.
 //
-// NO generic Unlockers bypass. NO blanket car unlock. NO stage-select unlock.
-// NO Time Savers. NO online/Ebisu zeroing.
+// Deliberately NOT bypassed:
+//   * GaragePurchaseUnlocker / ordinary car progression;
+//   * driver level, stage, boss, challenge medal, multiplayer objective,
+//     Autolog and other progression unlockers;
+//   * Time Savers, profile/XP grants, VIP/demo flags and online-pass offers;
+//   * generic Unlockers[] handling;
+//   * stage-select, blanket car-unlock or Ebisu/Autolog patches.
+//
+// This remains a standalone ASI for now, but the implementation is intentionally
+// narrow and self-contained so it can later be folded into The Run Definitive
+// Edition patch without changing its behavior.
 //
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <cstdint>
-#include <cstdio>
-#include <cstdarg>
 #include <cstring>
 
 #include "includes/injector/injector.hpp"
@@ -40,7 +43,6 @@ namespace
     constexpr uintptr_t kGrantOnlineUnlockVA = 0x007F3780;
 
     constexpr uintptr_t kOnlineUnlockerVtableVA = 0x024791FC;
-    constexpr uintptr_t kGaragePurchaseUnlockerVtableVA = 0x0247920C;
 
     const uint8_t kOnlineUnlockerExpected[kOnlineUnlockerPatchSize] = {
         0x51,
@@ -63,9 +65,8 @@ namespace
     using GrantOnlineUnlockFn = void (__thiscall *)(void* unlockManager, OnlineUnlocker* unlocker);
 
     OnlineUnlockerMethodFn g_OriginalOnlineUnlockerMethod = nullptr;
-    volatile LONG g_ObservationCount = 0;
 
-    // Runtime-discovered content ownership offers only.
+    // Validated discontinued content-ownership offers only.
     const char* const kWhitelistedOffers[] = {
         "r_carbon",
         "r_mostwanted",
@@ -106,77 +107,31 @@ namespace
         return end >= begin && end <= regionEnd;
     }
 
-    void AppendLog(const char* fmt, ...)
-    {
-        char buffer[1024]{};
-        va_list args;
-        va_start(args, fmt);
-        _vsnprintf_s(buffer, sizeof(buffer), _TRUNCATE, fmt, args);
-        va_end(args);
-
-        HANDLE h = CreateFileA("NFSTR_SelectiveUnlocker_test8.log",
-                               FILE_APPEND_DATA,
-                               FILE_SHARE_READ | FILE_SHARE_WRITE,
-                               nullptr,
-                               OPEN_ALWAYS,
-                               FILE_ATTRIBUTE_NORMAL,
-                               nullptr);
-        if (h == INVALID_HANDLE_VALUE)
-            return;
-
-        DWORD written = 0;
-        WriteFile(h, buffer, static_cast<DWORD>(std::strlen(buffer)), &written, nullptr);
-        CloseHandle(h);
-    }
-
-    void CopyReadableCString(const char* src, char* dst, size_t dstSize)
+    bool CopyReadableCString(const char* src, char* dst, size_t dstSize)
     {
         if (!dst || dstSize == 0)
-            return;
+            return false;
 
         dst[0] = '\0';
         if (!src)
-        {
-            strcpy_s(dst, dstSize, "<null>");
-            return;
-        }
+            return false;
 
-        size_t i = 0;
-        for (; i + 1 < dstSize; ++i)
+        for (size_t i = 0; i + 1 < dstSize; ++i)
         {
             if (!IsReadableRange(src + i, 1))
             {
-                if (i == 0)
-                    strcpy_s(dst, dstSize, "<unreadable>");
-                return;
+                dst[0] = '\0';
+                return false;
             }
 
             const char c = src[i];
             dst[i] = c;
             if (c == '\0')
-                return;
+                return true;
         }
 
         dst[dstSize - 1] = '\0';
-    }
-
-    bool NeutralizeReflectedBoolField(uintptr_t preferredStringVA, const char* expectedName)
-    {
-        const size_t length = std::strlen(expectedName);
-        char* const liveString = reinterpret_cast<char*>(RebaseGameAddress(preferredStringVA));
-
-        if (!IsReadableRange(liveString, length + 1))
-            return false;
-
-        if (std::memcmp(liveString, expectedName, length + 1) != 0)
-            return false;
-
-        injector::WriteMemory<uint8_t>(
-            reinterpret_cast<uintptr_t>(liveString + length - 1),
-            0,
-            true);
-
-        return true;
+        return false;
     }
 
     bool IsWhitelistedOffer(const char* offer)
@@ -193,14 +148,53 @@ namespace
         return false;
     }
 
+    bool PatchVisibilityMetadata()
+    {
+        static constexpr char kPromoName[] = "IsPromoContent";
+        static constexpr char kHiddenName[] = "IsHiddenUnlock";
+
+        char* const promo = reinterpret_cast<char*>(RebaseGameAddress(kIsPromoContentVA));
+        char* const hidden = reinterpret_cast<char*>(RebaseGameAddress(kIsHiddenUnlockVA));
+
+        if (!IsReadableRange(promo, sizeof(kPromoName)) ||
+            !IsReadableRange(hidden, sizeof(kHiddenName)))
+            return false;
+
+        if (std::memcmp(promo, kPromoName, sizeof(kPromoName)) != 0 ||
+            std::memcmp(hidden, kHiddenName, sizeof(kHiddenName)) != 0)
+            return false;
+
+        // Preserve the proven Ultimate Unlocker visibility behavior by truncating
+        // each reflected property name by one character.
+        injector::WriteMemory<uint8_t>(
+            reinterpret_cast<uintptr_t>(promo + sizeof(kPromoName) - 2),
+            0,
+            true);
+
+        injector::WriteMemory<uint8_t>(
+            reinterpret_cast<uintptr_t>(hidden + sizeof(kHiddenName) - 2),
+            0,
+            true);
+
+        return true;
+    }
+
     bool GrantThroughStockSuccessPath(OnlineUnlocker* self)
     {
-        void* const rootManager = *reinterpret_cast<void**>(RebaseGameAddress(kUnlockManagerGlobalVA));
+        void** const rootManagerAddress =
+            reinterpret_cast<void**>(RebaseGameAddress(kUnlockManagerGlobalVA));
+
+        if (!IsReadableRange(rootManagerAddress, sizeof(void*)))
+            return false;
+
+        void* const rootManager = *rootManagerAddress;
         if (!rootManager)
             return false;
 
         void* const unlockManager = reinterpret_cast<uint8_t*>(rootManager) + kUnlockManagerOffset;
-        const auto grant = reinterpret_cast<GrantOnlineUnlockFn>(RebaseGameAddress(kGrantOnlineUnlockVA));
+        const auto grant = reinterpret_cast<GrantOnlineUnlockFn>(
+            RebaseGameAddress(kGrantOnlineUnlockVA));
+
         grant(unlockManager, self);
         return true;
     }
@@ -212,61 +206,18 @@ namespace
 
         const uintptr_t vtable = *reinterpret_cast<const uintptr_t*>(self);
         const uintptr_t onlineVtable = RebaseGameAddress(kOnlineUnlockerVtableVA);
-        const uintptr_t garageVtable = RebaseGameAddress(kGaragePurchaseUnlockerVtableVA);
 
-        const char* kind = "OnlineUnlocker-derived";
+        // Only the exact OnlineUnlocker subtype is eligible. Derived types such as
+        // GaragePurchaseUnlocker must continue through the original game logic.
         if (vtable == onlineVtable)
-            kind = "OnlineUnlocker";
-        else if (vtable == garageVtable)
-            kind = "GaragePurchaseUnlocker";
-
-        char offer[192]{};
-        char pcSku[192]{};
-        char xenonSku[192]{};
-        char ps3Sku[192]{};
-        CopyReadableCString(self->offerId, offer, sizeof(offer));
-        CopyReadableCString(self->pcSku, pcSku, sizeof(pcSku));
-        CopyReadableCString(self->xenonSku, xenonSku, sizeof(xenonSku));
-        CopyReadableCString(self->ps3Sku, ps3Sku, sizeof(ps3Sku));
-
-        const bool exactOnlineUnlocker = (vtable == onlineVtable);
-        const bool whitelisted = exactOnlineUnlocker && IsWhitelistedOffer(offer);
-
-        const LONG observation = InterlockedIncrement(&g_ObservationCount);
-        if (observation <= 500)
         {
-            AppendLog("entitlement #%ld self=%08X kind=%s offer=\"%s\" pcSku=\"%s\" xenonSku=\"%s\" ps3Sku=\"%s\"\r\n",
-                      observation,
-                      static_cast<unsigned>(reinterpret_cast<uintptr_t>(self)),
-                      kind,
-                      offer,
-                      pcSku,
-                      xenonSku,
-                      ps3Sku);
-        }
-
-        if (whitelisted)
-        {
-            if (GrantThroughStockSuccessPath(self))
+            char offer[128]{};
+            if (CopyReadableCString(self->offerId, offer, sizeof(offer)) &&
+                IsWhitelistedOffer(offer) &&
+                GrantThroughStockSuccessPath(self))
             {
-                if (observation <= 500)
-                    AppendLog("  -> GRANTED: whitelisted DLC/promo entitlement\r\n");
                 return;
             }
-
-            if (observation <= 500)
-                AppendLog("  -> grant manager unavailable; falling back to original method\r\n");
-        }
-        else if (observation <= 500)
-        {
-            if (vtable == garageVtable)
-                AppendLog("  -> ORIGINAL: GaragePurchaseUnlocker excluded\r\n");
-            else if (std::strcmp(offer, "timesavers_pack") == 0)
-                AppendLog("  -> ORIGINAL: Time Savers explicitly excluded\r\n");
-            else if (std::strncmp(offer, "olp_", 4) == 0)
-                AppendLog("  -> ORIGINAL: online-pass entitlement excluded\r\n");
-            else
-                AppendLog("  -> ORIGINAL: entitlement not on DLC/promo allow-list\r\n");
         }
 
         if (g_OriginalOnlineUnlockerMethod)
@@ -290,42 +241,37 @@ namespace
                     kOnlineUnlockerPatchSize);
 
         trampoline[kOnlineUnlockerPatchSize] = 0xE9;
-        const intptr_t jumpFrom = reinterpret_cast<intptr_t>(trampoline + kOnlineUnlockerPatchSize + 5);
-        const intptr_t jumpTo = static_cast<intptr_t>(liveMethod + kOnlineUnlockerPatchSize);
+        const intptr_t jumpFrom = reinterpret_cast<intptr_t>(
+            trampoline + kOnlineUnlockerPatchSize + 5);
+        const intptr_t jumpTo = static_cast<intptr_t>(
+            liveMethod + kOnlineUnlockerPatchSize);
         const int32_t relative = static_cast<int32_t>(jumpTo - jumpFrom);
+
         std::memcpy(trampoline + kOnlineUnlockerPatchSize + 1,
                     &relative,
                     sizeof(relative));
 
         FlushInstructionCache(GetCurrentProcess(), trampoline, trampolineSize);
-        g_OriginalOnlineUnlockerMethod = reinterpret_cast<OnlineUnlockerMethodFn>(trampoline);
+        g_OriginalOnlineUnlockerMethod =
+            reinterpret_cast<OnlineUnlockerMethodFn>(trampoline);
         return true;
     }
 
     bool InstallOnlineUnlockerHook()
     {
         const uintptr_t liveMethod = RebaseGameAddress(kOnlineUnlockerMethodVA);
-        if (!IsReadableRange(reinterpret_cast<const void*>(liveMethod), kOnlineUnlockerPatchSize))
-        {
-            AppendLog("OnlineUnlocker hook FAILED: method unreadable\r\n");
+
+        if (!IsReadableRange(reinterpret_cast<const void*>(liveMethod),
+                             kOnlineUnlockerPatchSize))
             return false;
-        }
 
         if (std::memcmp(reinterpret_cast<const void*>(liveMethod),
                         kOnlineUnlockerExpected,
                         kOnlineUnlockerPatchSize) != 0)
-        {
-            const uint8_t* b = reinterpret_cast<const uint8_t*>(liveMethod);
-            AppendLog("OnlineUnlocker hook FAILED: unexpected bytes %02X %02X %02X %02X %02X %02X %02X %02X\r\n",
-                      b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]);
             return false;
-        }
 
         if (!BuildOriginalMethodTrampoline(liveMethod))
-        {
-            AppendLog("OnlineUnlocker hook FAILED: could not build original-method trampoline\r\n");
             return false;
-        }
 
         injector::MakeJMP(liveMethod,
                           reinterpret_cast<uintptr_t>(&OnlineUnlockerEntitlementHook),
@@ -334,49 +280,34 @@ namespace
         for (size_t i = 5; i < kOnlineUnlockerPatchSize; ++i)
             injector::WriteMemory<uint8_t>(liveMethod + i, 0x90, true);
 
-        AppendLog("OnlineUnlocker selective entitlement hook installed at %08X\r\n",
-                  static_cast<unsigned>(kOnlineUnlockerMethodVA));
         return true;
     }
 
     void Init()
     {
-        DeleteFileA("NFSTR_SelectiveUnlocker_test8.log");
-        AppendLog("NFSTR Selective Unlocker test 8\r\n");
-        AppendLog("Visibility: neutralise IsPromoContent + IsHiddenUnlock reflection names\r\n");
-        AppendLog("Entitlements: grant only allow-listed discontinued content OnlineUnlockers\r\n");
-        AppendLog("GaragePurchaseUnlocker, Time Savers, XP/profile, VIP/demo and all olp_* controls use original logic.\r\n");
-        AppendLog("No generic Unlockers bypass; no blanket car/stage unlock; no Ebisu patches.\r\n\r\n");
-
-        const bool promoPatched = NeutralizeReflectedBoolField(
-            kIsPromoContentVA,
-            "IsPromoContent");
-        const bool hiddenPatched = NeutralizeReflectedBoolField(
-            kIsHiddenUnlockVA,
-            "IsHiddenUnlock");
-
-        AppendLog("visibility IsPromoContent=%s IsHiddenUnlock=%s\r\n",
-                  promoPatched ? "patched" : "FAILED",
-                  hiddenPatched ? "patched" : "FAILED");
-
-        AppendLog("allow-list:");
-        for (const char* offer : kWhitelistedOffers)
-            AppendLog(" %s", offer);
-        AppendLog("\r\n");
-
+        const bool visibilityPatched = PatchVisibilityMetadata();
         const bool entitlementHooked = InstallOnlineUnlockerHook();
-        AppendLog("selective entitlement hook=%s\r\n",
-                  entitlementHooked ? "installed" : "FAILED");
 
-        OutputDebugStringA(
-            "[NFSTR_SelectiveUnlocker_test8] Whitelisted DLC/promo entitlement bypass installed.\n");
+        if (visibilityPatched && entitlementHooked)
+        {
+            OutputDebugStringA(
+                "[NFSTR_SelectiveUnlocker] Selective DLC/promo unlocker installed.\n");
+        }
+        else
+        {
+            OutputDebugStringA(
+                "[NFSTR_SelectiveUnlocker] Compatibility check failed; one or more patches were not installed.\n");
+        }
     }
 }
 
-BOOL APIENTRY DllMain(HMODULE /*hModule*/, DWORD reason, LPVOID /*lpReserved*/)
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID /*lpReserved*/)
 {
     if (reason == DLL_PROCESS_ATTACH)
+    {
+        DisableThreadLibraryCalls(hModule);
         Init();
+    }
 
     return TRUE;
 }
