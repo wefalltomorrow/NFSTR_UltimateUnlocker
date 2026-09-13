@@ -1,18 +1,21 @@
 //
-// Need for Speed The Run - Selective Promo/DLC Unlocker (test 4)
+// Need for Speed The Run - Selective Promo/DLC Unlocker (test 5)
 //
-// Test 3 proved the promo/hidden reflection patches expose DLC/promo content,
-// but its diagnostic garage hook was installed at only one caller. The Test 3
-// log showed that caller never ran while browsing View Cars.
+// Test 4 proved that redirecting getMatchingGarageCar callers is not the path
+// used by the View Cars lock presentation: all ten verified callers were hooked,
+// yet browsing locked cars produced no runtime records.
 //
-// Test 4 keeps the proven visibility behaviour and redirects every known
-// EXTERNAL direct caller of NFSUIVehicleComp::getMatchingGarageCar to the same
-// selective wrapper. This lets View Cars and the other garage paths report the
-// real Unlockable flags instead of observing only one unrelated call site.
+// Test 5 moves to the two exact locked-car branches patched by Xan's original
+// Ultimate Unlocker. Unlike the original mod, these hooks DO NOT blanket-unlock
+// every car. They inspect the same Unlockable object and skip the locked path only
+// when m_isPromoContent is true. All non-promo cars stay on the original path.
 //
-// Normal progression remains intentionally untouched. There is still NO generic
-// Unlockers bypass, NO stage-select unlock, NO blanket car unlock, and NO
-// online/Ebisu patching.
+// The proven IsPromoContent / IsHiddenUnlock reflection-name patches are retained
+// only to keep DLC/promo entries visible. The two car-gate hooks log all adjacent
+// flags so we can determine whether that visibility patch also destroys the promo
+// discriminator.
+//
+// NO generic Unlockers bypass. NO stage-select unlock. NO online/Ebisu patches.
 //
 
 #define WIN32_LEAN_AND_MEAN
@@ -23,29 +26,28 @@
 #include <cstring>
 
 #include "includes/injector/injector.hpp"
-#include "includes/patterns.hpp"
 
 namespace
 {
     constexpr uintptr_t kPreferredImageBase = 0x00400000;
+
     constexpr uintptr_t kIsPromoContentVA = 0x025A3620;
     constexpr uintptr_t kIsHiddenUnlockVA = 0x025A3630;
 
-    // Direct calls to getMatchingGarageCar in the supported DRM-free v1.1 EXE.
-    // 0x00932437 is deliberately excluded because it is inside/adjacent to the
-    // target routine and redirecting it could recurse through our wrapper.
-    constexpr uintptr_t kGarageCallSites[] = {
-        0x008848ED,
-        0x00885E34,
-        0x00894A13,
-        0x0093C4DC,
-        0x0093C659,
-        0x0093C805,
-        0x0093D17F,
-        0x0093D612,
-        0x0093D714,
-        0x0093F199,
-    };
+    // These are the two broad car-unlock sites used by the original Ultimate
+    // Unlocker. Both execute only after the game has already determined the car
+    // is locked. We replace exactly five bytes at each site and preserve the
+    // original instructions for non-promo cars.
+    constexpr uintptr_t kCarGate1VA = 0x0093E00D;
+    constexpr uintptr_t kCarGate1LockedContinueVA = 0x0093E012;
+    constexpr uintptr_t kCarGate1UnlockedContinueVA = 0x0093E0D8;
+
+    constexpr uintptr_t kCarGate2VA = 0x0093F214;
+    constexpr uintptr_t kCarGate2LockedContinueVA = 0x0093F219;
+    constexpr uintptr_t kCarGate2UnlockedContinueVA = 0x0093F2A0;
+
+    const uint8_t kCarGate1Expected[5] = { 0x8B, 0x54, 0x24, 0x7C, 0x51 }; // mov edx,[esp+7C]; push ecx
+    const uint8_t kCarGate2Expected[5] = { 0x51, 0x8B, 0x4C, 0x24, 0x50 }; // push ecx; mov ecx,[esp+50]
 
     struct Unlockable
     {
@@ -56,10 +58,11 @@ namespace
         bool m_isPromoContent;
     };
 
-    using GetMatchingGarageCarFn = Unlockable* (__cdecl *)(uint32_t attribSysClassKey,
-                                                            uint32_t attribSysCollectionKey);
-
-    GetMatchingGarageCarFn g_GetMatchingGarageCar = nullptr;
+    uintptr_t g_CarGate1LockedContinue = 0;
+    uintptr_t g_CarGate1UnlockedContinue = 0;
+    uintptr_t g_CarGate2LockedContinue = 0;
+    uintptr_t g_CarGate2UnlockedContinue = 0;
+    volatile LONG g_ObservationCount = 0;
 
     uintptr_t RebaseGameAddress(uintptr_t preferredVA)
     {
@@ -93,7 +96,7 @@ namespace
         _vsnprintf_s(buffer, sizeof(buffer), _TRUNCATE, fmt, args);
         va_end(args);
 
-        HANDLE h = CreateFileA("NFSTR_SelectiveUnlocker_test4.log",
+        HANDLE h = CreateFileA("NFSTR_SelectiveUnlocker_test5.log",
                                FILE_APPEND_DATA,
                                FILE_SHARE_READ | FILE_SHARE_WRITE,
                                nullptr,
@@ -127,50 +130,119 @@ namespace
         return true;
     }
 
-    Unlockable* __cdecl GetMatchingGarageCarHook(uint32_t attribSysClassKey,
-                                                  uint32_t attribSysCollectionKey)
+    void __cdecl ObserveUnlockable(uint32_t site, Unlockable* car)
     {
-        Unlockable* car = g_GetMatchingGarageCar
-            ? g_GetMatchingGarageCar(attribSysClassKey, attribSysCollectionKey)
-            : nullptr;
-
         if (!car)
         {
-            AppendLog("class=%08X collection=%08X result=null\r\n",
-                      attribSysClassKey,
-                      attribSysCollectionKey);
-            return nullptr;
+            AppendLog("gate%u car=null\r\n", site);
+            return;
         }
 
-        const bool wasUnlocked = car->m_isUnlocked;
-        const bool hideHowTo = car->m_hideHowTo;
-        const bool hidden = car->m_isHiddenUnlock;
-        const bool promo = car->m_isPromoContent;
+        const LONG observation = InterlockedIncrement(&g_ObservationCount);
+        if (observation > 500)
+            return;
 
-        // Keep this deliberately narrow. If the visibility reflection patch has
-        // caused m_isPromoContent to stop being populated, the log will prove it;
-        // do NOT compensate by broadly unlocking hidden/progression rewards.
-        if (!car->m_isUnlocked && promo)
-            car->m_isUnlocked = true;
-
-        AppendLog("class=%08X collection=%08X unlocked:%u->%u hideHowTo=%u hidden=%u promo=%u\r\n",
-                  attribSysClassKey,
-                  attribSysCollectionKey,
-                  wasUnlocked ? 1u : 0u,
+        AppendLog("gate%u car=%08X unlocked=%u hideHowTo=%u hidden=%u promo=%u action=%s\r\n",
+                  site,
+                  static_cast<unsigned>(reinterpret_cast<uintptr_t>(car)),
                   car->m_isUnlocked ? 1u : 0u,
-                  hideHowTo ? 1u : 0u,
-                  hidden ? 1u : 0u,
-                  promo ? 1u : 0u);
+                  car->m_hideHowTo ? 1u : 0u,
+                  car->m_isHiddenUnlock ? 1u : 0u,
+                  car->m_isPromoContent ? 1u : 0u,
+                  car->m_isPromoContent ? "SELECTIVE_UNLOCK" : "VANILLA_LOCKED_PATH");
+    }
 
-        return car;
+    // Site 1 enters with ECX = Unlockable*. The five overwritten stock bytes are:
+    //   mov edx,[esp+7C]
+    //   push ecx
+    // Non-promo entries execute those instructions and return to 0x93E012.
+    // Promo entries set +0x18 and jump to the stock already-unlocked continuation.
+    void __declspec(naked) CarGateHook1()
+    {
+        __asm
+        {
+            pushfd
+            pushad
+            push ecx
+            push 1
+            call ObserveUnlockable
+            add esp, 8
+            popad
+            popfd
+
+            cmp byte ptr [ecx + 1Bh], 0
+            je gate1_vanilla
+
+            mov byte ptr [ecx + 18h], 1
+            jmp dword ptr [g_CarGate1UnlockedContinue]
+
+        gate1_vanilla:
+            mov edx, dword ptr [esp + 7Ch]
+            push ecx
+            jmp dword ptr [g_CarGate1LockedContinue]
+        }
+    }
+
+    // Site 2 enters with EBP = Unlockable*. The five overwritten stock bytes are:
+    //   push ecx
+    //   mov ecx,[esp+50]
+    void __declspec(naked) CarGateHook2()
+    {
+        __asm
+        {
+            pushfd
+            pushad
+            push ebp
+            push 2
+            call ObserveUnlockable
+            add esp, 8
+            popad
+            popfd
+
+            cmp byte ptr [ebp + 1Bh], 0
+            je gate2_vanilla
+
+            mov byte ptr [ebp + 18h], 1
+            jmp dword ptr [g_CarGate2UnlockedContinue]
+
+        gate2_vanilla:
+            push ecx
+            mov ecx, dword ptr [esp + 50h]
+            jmp dword ptr [g_CarGate2LockedContinue]
+        }
+    }
+
+    bool InstallCarGateHook(uintptr_t preferredVA,
+                            const uint8_t (&expected)[5],
+                            void* hook,
+                            const char* name)
+    {
+        const uintptr_t liveVA = RebaseGameAddress(preferredVA);
+        if (!IsReadableRange(reinterpret_cast<const void*>(liveVA), sizeof(expected)))
+        {
+            AppendLog("%s FAILED: site unreadable\r\n", name);
+            return false;
+        }
+
+        if (std::memcmp(reinterpret_cast<const void*>(liveVA), expected, sizeof(expected)) != 0)
+        {
+            const uint8_t* bytes = reinterpret_cast<const uint8_t*>(liveVA);
+            AppendLog("%s FAILED: bytes=%02X %02X %02X %02X %02X\r\n",
+                      name, bytes[0], bytes[1], bytes[2], bytes[3], bytes[4]);
+            return false;
+        }
+
+        injector::MakeJMP(liveVA, reinterpret_cast<uintptr_t>(hook), true);
+        AppendLog("%s installed at %08X\r\n", name, static_cast<unsigned>(preferredVA));
+        return true;
     }
 
     void Init()
     {
-        DeleteFileA("NFSTR_SelectiveUnlocker_test4.log");
-        AppendLog("NFSTR Selective Unlocker test 4\r\n");
+        DeleteFileA("NFSTR_SelectiveUnlocker_test5.log");
+        AppendLog("NFSTR Selective Unlocker test 5\r\n");
         AppendLog("Visibility: neutralise IsPromoContent + IsHiddenUnlock reflection names\r\n");
-        AppendLog("Cars: hook all known external getMatchingGarageCar callers; unlock promo=true only\r\n");
+        AppendLog("Cars: hook Xan's two original locked-car branches; skip lock path ONLY for promo=true\r\n");
         AppendLog("No generic Unlockers bypass; no stage unlock; no online/Ebisu patches.\r\n\r\n");
 
         const bool promoPatched = NeutralizeReflectedBoolField(
@@ -184,77 +256,27 @@ namespace
                   promoPatched ? "patched" : "FAILED",
                   hiddenPatched ? "patched" : "FAILED");
 
-        pattern::Win32::Init();
-        if (!pattern::Win32::bIsInited())
-        {
-            AppendLog("ERROR: pattern scanner failed to initialise.\r\n");
-            return;
-        }
+        g_CarGate1LockedContinue = RebaseGameAddress(kCarGate1LockedContinueVA);
+        g_CarGate1UnlockedContinue = RebaseGameAddress(kCarGate1UnlockedContinueVA);
+        g_CarGate2LockedContinue = RebaseGameAddress(kCarGate2LockedContinueVA);
+        g_CarGate2UnlockedContinue = RebaseGameAddress(kCarGate2UnlockedContinueVA);
 
-        // Resolve the original target from the same signature used by FusionFix.
-        const uintptr_t anchorCall = pattern::get_first(
-            "E8 ? ? ? ? 83 C4 ? 80 7C 24 ? ? 74 ? 80 78");
-        if (!anchorCall)
-        {
-            AppendLog("ERROR: getMatchingGarageCar anchor pattern not found.\r\n");
-            return;
-        }
+        const bool gate1 = InstallCarGateHook(
+            kCarGate1VA,
+            kCarGate1Expected,
+            reinterpret_cast<void*>(&CarGateHook1),
+            "car gate 1");
 
-        const uintptr_t originalTarget =
-            static_cast<uintptr_t>(injector::GetBranchDestination(anchorCall));
-        g_GetMatchingGarageCar = reinterpret_cast<GetMatchingGarageCarFn>(originalTarget);
+        const bool gate2 = InstallCarGateHook(
+            kCarGate2VA,
+            kCarGate2Expected,
+            reinterpret_cast<void*>(&CarGateHook2),
+            "car gate 2");
 
-        if (!g_GetMatchingGarageCar)
-        {
-            AppendLog("ERROR: could not resolve original getMatchingGarageCar target.\r\n");
-            return;
-        }
-
-        unsigned patchedCalls = 0;
-        for (const uintptr_t preferredCallVA : kGarageCallSites)
-        {
-            const uintptr_t callSite = RebaseGameAddress(preferredCallVA);
-            if (!IsReadableRange(reinterpret_cast<const void*>(callSite), 5))
-            {
-                AppendLog("caller %08X skipped: unreadable\r\n",
-                          static_cast<unsigned>(preferredCallVA));
-                continue;
-            }
-
-            const uint8_t opcode = *reinterpret_cast<const uint8_t*>(callSite);
-            if (opcode != 0xE8)
-            {
-                AppendLog("caller %08X skipped: opcode=%02X, expected E8\r\n",
-                          static_cast<unsigned>(preferredCallVA), opcode);
-                continue;
-            }
-
-            const uintptr_t destination =
-                static_cast<uintptr_t>(injector::GetBranchDestination(callSite));
-            if (destination != originalTarget)
-            {
-                AppendLog("caller %08X skipped: target=%08X expected=%08X\r\n",
-                          static_cast<unsigned>(preferredCallVA),
-                          static_cast<unsigned>(destination),
-                          static_cast<unsigned>(originalTarget));
-                continue;
-            }
-
-            injector::MakeCALL(callSite, GetMatchingGarageCarHook, true);
-            ++patchedCalls;
-            AppendLog("caller %08X hooked\r\n", static_cast<unsigned>(preferredCallVA));
-        }
-
-        AppendLog("garage original target=%08X; external callers hooked=%u/%u\r\n",
-                  static_cast<unsigned>(originalTarget),
-                  patchedCalls,
-                  static_cast<unsigned>(sizeof(kGarageCallSites) / sizeof(kGarageCallSites[0])));
-
-        if (patchedCalls == 0)
-            AppendLog("ERROR: no garage callers were hooked.\r\n");
+        AppendLog("car gates installed=%u/2\r\n", (gate1 ? 1u : 0u) + (gate2 ? 1u : 0u));
 
         OutputDebugStringA(
-            "[NFSTR_SelectiveUnlocker_test4] Visibility patches + multi-caller garage diagnostics installed.\n");
+            "[NFSTR_SelectiveUnlocker_test5] Visibility + selective original car-gate hooks installed.\n");
     }
 }
 
