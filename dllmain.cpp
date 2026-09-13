@@ -1,23 +1,20 @@
 //
-// Need for Speed The Run - Selective Promo/DLC Unlocker (test 6)
+// Need for Speed The Run - Selective Promo/DLC Unlocker (test 7)
 //
-// Test 6 moves away from car-side forcing and targets the game's actual
-// entitlement unlocker class.
+// Test 6 proved that OnlineUnlocker is the live entitlement path, but it also
+// proved that forcing every OnlineUnlocker-derived object is too broad.  The
+// diagnostic build granted Time Savers and every GaragePurchaseUnlocker, which
+// unlocked normal level/career reward cars as collateral.
 //
-// Reverse engineering of the v1.1 Win32 type metadata shows distinct unlocker
-// classes for normal progression (LevelUpUnlocker, StageCompletionUnlocker,
-// ChallengeCompletionUnlocker, etc.) and a separate OnlineUnlocker carrying
-// OfferId / PS3Sku / XenonSku / PCSku fields.  OnlineUnlocker's stock method at
-// 0x008D0BA0 searches the entitlement list and only calls 0x007F3780 when the
-// requested offer is owned.
+// Test 7 keeps the same entitlement hook but adds a strict allow-list.  Only
+// known discontinued DLC / preorder / advertising-promo ownership offers are
+// forced through the game's stock entitlement-success path.  Everything else,
+// including GaragePurchaseUnlocker, Time Savers, XP/profile bonuses, VIP/demo
+// flags and ordinary online-pass checks, executes the original game method.
 //
-// This build replaces ONLY that OnlineUnlocker entitlement check with the stock
-// success action.  Normal progression unlockers are untouched.  The derived
-// GaragePurchaseUnlocker uses the same virtual method and therefore follows the
-// same entitlement-only path.
-//
-// The proven IsPromoContent / IsHiddenUnlock reflection-name patches are kept
-// solely to expose otherwise-hidden promo/DLC UI entries.
+// Normal LevelUp / StageCompletion / ChallengeCompletion / career unlockers are
+// untouched.  The IsPromoContent / IsHiddenUnlock reflection-name patches are
+// retained only to expose hidden promo/DLC UI entries.
 //
 // NO generic Unlockers bypass. NO blanket car unlock. NO stage-select unlock.
 // NO online/Ebisu zeroing.
@@ -39,14 +36,9 @@ namespace
     constexpr uintptr_t kIsPromoContentVA = 0x025A3620;
     constexpr uintptr_t kIsHiddenUnlockVA = 0x025A3630;
 
-    // OnlineUnlocker::entitlement-check/update method in DRM-free v1.1.
     constexpr uintptr_t kOnlineUnlockerMethodVA = 0x008D0BA0;
+    constexpr size_t kOnlineUnlockerPatchSize = 8;
 
-    // Stock success path used by OnlineUnlocker after an entitlement match.
-    // Call shape in the game:
-    //   ecx = *(void**)0x02882500 + 0x3CB4
-    //   push OnlineUnlocker*
-    //   call 0x007F3780
     constexpr uintptr_t kUnlockManagerGlobalVA = 0x02882500;
     constexpr uintptr_t kUnlockManagerOffset = 0x00003CB4;
     constexpr uintptr_t kGrantOnlineUnlockVA = 0x007F3780;
@@ -54,7 +46,7 @@ namespace
     constexpr uintptr_t kOnlineUnlockerVtableVA = 0x024791FC;
     constexpr uintptr_t kGaragePurchaseUnlockerVtableVA = 0x0247920C;
 
-    const uint8_t kOnlineUnlockerExpected[] = {
+    const uint8_t kOnlineUnlockerExpected[kOnlineUnlockerPatchSize] = {
         0x51,                   // push ecx
         0x55,                   // push ebp
         0x8B, 0xE9,             // mov ebp,ecx
@@ -71,9 +63,40 @@ namespace
         const char* pcSku;      // +0x2C
     };
 
+    using OnlineUnlockerMethodFn = void (__thiscall *)(OnlineUnlocker* self);
     using GrantOnlineUnlockFn = void (__thiscall *)(void* unlockManager, OnlineUnlocker* unlocker);
 
+    OnlineUnlockerMethodFn g_OriginalOnlineUnlockerMethod = nullptr;
     volatile LONG g_ObservationCount = 0;
+
+    // Test-6 runtime discovery gave us the exact OfferIds.  Keep this list
+    // intentionally narrow: content ownership only, not progression shortcuts.
+    const char* const kWhitelistedOffers[] = {
+        // Heroes & Villains / preorder Challenge Series families.
+        "r_carbon",
+        "r_mostwanted",
+        "r_underground",
+        "handv_pack",
+
+        // Discontinued content pack.
+        "supercar_pack",
+
+        // Dr Pepper vehicle promos.  dp_profile and dp_xp are deliberately NOT
+        // included because they affect profile/progression rather than cars.
+        "dp_fordgt",
+        "dp_chevrolet",
+        "dp_porsche",
+
+        // Old Spice and AEM promotional content.
+        "os_pack",
+        "aem_adsales",
+
+        // Limited-Edition-associated free online-pass entitlement.  This is kept
+        // separate from the generic/free/purchased online-pass offers because it
+        // is the only discovered entitlement whose name is explicitly LE-linked.
+        // Test 7 will tell us whether it is actually needed for LE content.
+        "olp_le_free",
+    };
 
     uintptr_t RebaseGameAddress(uintptr_t preferredVA)
     {
@@ -110,7 +133,7 @@ namespace
         _vsnprintf_s(buffer, sizeof(buffer), _TRUNCATE, fmt, args);
         va_end(args);
 
-        HANDLE h = CreateFileA("NFSTR_SelectiveUnlocker_test6.log",
+        HANDLE h = CreateFileA("NFSTR_SelectiveUnlocker_test7.log",
                                FILE_APPEND_DATA,
                                FILE_SHARE_READ | FILE_SHARE_WRITE,
                                nullptr,
@@ -175,6 +198,32 @@ namespace
         return true;
     }
 
+    bool IsWhitelistedOffer(const char* offer)
+    {
+        if (!offer || !offer[0])
+            return false;
+
+        for (const char* allowed : kWhitelistedOffers)
+        {
+            if (std::strcmp(offer, allowed) == 0)
+                return true;
+        }
+
+        return false;
+    }
+
+    bool GrantThroughStockSuccessPath(OnlineUnlocker* self)
+    {
+        void* const rootManager = *reinterpret_cast<void**>(RebaseGameAddress(kUnlockManagerGlobalVA));
+        if (!rootManager)
+            return false;
+
+        void* const unlockManager = reinterpret_cast<uint8_t*>(rootManager) + kUnlockManagerOffset;
+        const auto grant = reinterpret_cast<GrantOnlineUnlockFn>(RebaseGameAddress(kGrantOnlineUnlockVA));
+        grant(unlockManager, self);
+        return true;
+    }
+
     void __fastcall OnlineUnlockerEntitlementHook(OnlineUnlocker* self, void* /*edx*/)
     {
         if (!self)
@@ -199,6 +248,9 @@ namespace
         CopyReadableCString(self->xenonSku, xenonSku, sizeof(xenonSku));
         CopyReadableCString(self->ps3Sku, ps3Sku, sizeof(ps3Sku));
 
+        const bool exactOnlineUnlocker = (vtable == onlineVtable);
+        const bool whitelisted = exactOnlineUnlocker && IsWhitelistedOffer(offer);
+
         const LONG observation = InterlockedIncrement(&g_ObservationCount);
         if (observation <= 500)
         {
@@ -212,26 +264,65 @@ namespace
                       ps3Sku);
         }
 
-        void* const rootManager = *reinterpret_cast<void**>(RebaseGameAddress(kUnlockManagerGlobalVA));
-        if (!rootManager)
+        if (whitelisted)
         {
+            if (GrantThroughStockSuccessPath(self))
+            {
+                if (observation <= 500)
+                    AppendLog("  -> GRANTED: whitelisted DLC/promo entitlement\r\n");
+                return;
+            }
+
             if (observation <= 500)
-                AppendLog("  -> NOT GRANTED: unlock manager root is null\r\n");
-            return;
+                AppendLog("  -> grant manager unavailable; falling back to original method\r\n");
+        }
+        else if (observation <= 500)
+        {
+            if (vtable == garageVtable)
+                AppendLog("  -> ORIGINAL: GaragePurchaseUnlocker excluded\r\n");
+            else if (std::strcmp(offer, "timesavers_pack") == 0)
+                AppendLog("  -> ORIGINAL: Time Savers explicitly excluded\r\n");
+            else
+                AppendLog("  -> ORIGINAL: entitlement not on DLC/promo allow-list\r\n");
         }
 
-        void* const unlockManager = reinterpret_cast<uint8_t*>(rootManager) + kUnlockManagerOffset;
-        const auto grant = reinterpret_cast<GrantOnlineUnlockFn>(RebaseGameAddress(kGrantOnlineUnlockVA));
-        grant(unlockManager, self);
+        if (g_OriginalOnlineUnlockerMethod)
+            g_OriginalOnlineUnlockerMethod(self);
+    }
 
-        if (observation <= 500)
-            AppendLog("  -> GRANTED via stock OnlineUnlocker success path 0x007F3780\r\n");
+    bool BuildOriginalMethodTrampoline(uintptr_t liveMethod)
+    {
+        constexpr size_t trampolineSize = kOnlineUnlockerPatchSize + 5;
+        uint8_t* const trampoline = reinterpret_cast<uint8_t*>(
+            VirtualAlloc(nullptr,
+                         trampolineSize,
+                         MEM_COMMIT | MEM_RESERVE,
+                         PAGE_EXECUTE_READWRITE));
+
+        if (!trampoline)
+            return false;
+
+        std::memcpy(trampoline,
+                    reinterpret_cast<const void*>(liveMethod),
+                    kOnlineUnlockerPatchSize);
+
+        trampoline[kOnlineUnlockerPatchSize] = 0xE9;
+        const intptr_t jumpFrom = reinterpret_cast<intptr_t>(trampoline + kOnlineUnlockerPatchSize + 5);
+        const intptr_t jumpTo = static_cast<intptr_t>(liveMethod + kOnlineUnlockerPatchSize);
+        const int32_t relative = static_cast<int32_t>(jumpTo - jumpFrom);
+        std::memcpy(trampoline + kOnlineUnlockerPatchSize + 1,
+                    &relative,
+                    sizeof(relative));
+
+        FlushInstructionCache(GetCurrentProcess(), trampoline, trampolineSize);
+        g_OriginalOnlineUnlockerMethod = reinterpret_cast<OnlineUnlockerMethodFn>(trampoline);
+        return true;
     }
 
     bool InstallOnlineUnlockerHook()
     {
         const uintptr_t liveMethod = RebaseGameAddress(kOnlineUnlockerMethodVA);
-        if (!IsReadableRange(reinterpret_cast<const void*>(liveMethod), sizeof(kOnlineUnlockerExpected)))
+        if (!IsReadableRange(reinterpret_cast<const void*>(liveMethod), kOnlineUnlockerPatchSize))
         {
             AppendLog("OnlineUnlocker hook FAILED: method unreadable\r\n");
             return false;
@@ -239,7 +330,7 @@ namespace
 
         if (std::memcmp(reinterpret_cast<const void*>(liveMethod),
                         kOnlineUnlockerExpected,
-                        sizeof(kOnlineUnlockerExpected)) != 0)
+                        kOnlineUnlockerPatchSize) != 0)
         {
             const uint8_t* b = reinterpret_cast<const uint8_t*>(liveMethod);
             AppendLog("OnlineUnlocker hook FAILED: unexpected bytes %02X %02X %02X %02X %02X %02X %02X %02X\r\n",
@@ -247,22 +338,33 @@ namespace
             return false;
         }
 
+        if (!BuildOriginalMethodTrampoline(liveMethod))
+        {
+            AppendLog("OnlineUnlocker hook FAILED: could not build original-method trampoline\r\n");
+            return false;
+        }
+
         injector::MakeJMP(liveMethod,
                           reinterpret_cast<uintptr_t>(&OnlineUnlockerEntitlementHook),
                           true);
 
-        AppendLog("OnlineUnlocker entitlement hook installed at %08X\r\n",
+        // The trampoline copied eight complete bytes.  The entry jump consumes
+        // five; NOP the remaining three so no stale partial prologue remains.
+        for (size_t i = 5; i < kOnlineUnlockerPatchSize; ++i)
+            injector::WriteMemory<uint8_t>(liveMethod + i, 0x90, true);
+
+        AppendLog("OnlineUnlocker selective entitlement hook installed at %08X\r\n",
                   static_cast<unsigned>(kOnlineUnlockerMethodVA));
         return true;
     }
 
     void Init()
     {
-        DeleteFileA("NFSTR_SelectiveUnlocker_test6.log");
-        AppendLog("NFSTR Selective Unlocker test 6\r\n");
+        DeleteFileA("NFSTR_SelectiveUnlocker_test7.log");
+        AppendLog("NFSTR Selective Unlocker test 7\r\n");
         AppendLog("Visibility: neutralise IsPromoContent + IsHiddenUnlock reflection names\r\n");
-        AppendLog("Entitlements: force ONLY OnlineUnlocker/GaragePurchaseUnlocker through stock success path\r\n");
-        AppendLog("Normal progression unlocker classes remain untouched.\r\n");
+        AppendLog("Entitlements: grant only allow-listed DLC/promo OnlineUnlockers\r\n");
+        AppendLog("GaragePurchaseUnlocker + Time Savers + XP/profile + VIP/demo/online-pass controls pass through original logic.\r\n");
         AppendLog("No generic Unlockers bypass; no blanket car/stage unlock; no Ebisu patches.\r\n\r\n");
 
         const bool promoPatched = NeutralizeReflectedBoolField(
@@ -276,12 +378,17 @@ namespace
                   promoPatched ? "patched" : "FAILED",
                   hiddenPatched ? "patched" : "FAILED");
 
+        AppendLog("allow-list:");
+        for (const char* offer : kWhitelistedOffers)
+            AppendLog(" %s", offer);
+        AppendLog("\r\n");
+
         const bool entitlementHooked = InstallOnlineUnlockerHook();
         AppendLog("selective entitlement hook=%s\r\n",
                   entitlementHooked ? "installed" : "FAILED");
 
         OutputDebugStringA(
-            "[NFSTR_SelectiveUnlocker_test6] Selective OnlineUnlocker entitlement bypass installed.\n");
+            "[NFSTR_SelectiveUnlocker_test7] Whitelisted DLC/promo entitlement bypass installed.\n");
     }
 }
 
