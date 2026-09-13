@@ -11,6 +11,7 @@ on:
       - selective-promo-dlc-test5
       - selective-promo-dlc-test6
       - selective-promo-dlc-test7
+      - selective-promo-dlc-test8
   pull_request:
   workflow_dispatch:
 
@@ -48,6 +49,7 @@ jobs:
             'selective-promo-dlc-test5' { 'NFSTR_SelectiveUnlocker_test5.asi' }
             'selective-promo-dlc-test6' { 'NFSTR_SelectiveUnlocker_test6.asi' }
             'selective-promo-dlc-test7' { 'NFSTR_SelectiveUnlocker_test7.asi' }
+            'selective-promo-dlc-test8' { 'NFSTR_SelectiveUnlocker_test8.asi' }
             default { 'NFSTR_SelectiveUnlocker.asi' }
           }
 
