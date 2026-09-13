@@ -1,23 +1,19 @@
 //
-// Need for Speed The Run - Selective Promo/DLC Unlocker (test 7)
+// Need for Speed The Run - Selective Promo/DLC Unlocker (test 8)
 //
-// Test 6 proved that OnlineUnlocker is the live entitlement path, but it also
-// proved that forcing every OnlineUnlocker-derived object is too broad.  The
-// diagnostic build granted Time Savers and every GaragePurchaseUnlocker, which
-// unlocked normal level/career reward cars as collateral.
+// Test 7 visually achieved the intended selective behavior: DLC/promo Challenge
+// Series and ownership-gated cars became available while normal level, boss,
+// challenge-medal, multiplayer-objective and Autolog requirements remained
+// locked.  Test 8 tightens the allow-list one step further by removing the
+// suspicious olp_le_free entitlement.  The "olp" family is an online-pass
+// control, not content ownership, so it should follow the original game logic.
 //
-// Test 7 keeps the same entitlement hook but adds a strict allow-list.  Only
-// known discontinued DLC / preorder / advertising-promo ownership offers are
-// forced through the game's stock entitlement-success path.  Everything else,
-// including GaragePurchaseUnlocker, Time Savers, XP/profile bonuses, VIP/demo
-// flags and ordinary online-pass checks, executes the original game method.
-//
-// Normal LevelUp / StageCompletion / ChallengeCompletion / career unlockers are
-// untouched.  The IsPromoContent / IsHiddenUnlock reflection-name patches are
-// retained only to expose hidden promo/DLC UI entries.
+// Only exact OnlineUnlocker objects with known discontinued content OfferIds are
+// granted.  GaragePurchaseUnlocker and all other OnlineUnlocker offers execute
+// the original game method through a trampoline.
 //
 // NO generic Unlockers bypass. NO blanket car unlock. NO stage-select unlock.
-// NO online/Ebisu zeroing.
+// NO Time Savers. NO online/Ebisu zeroing.
 //
 
 #define WIN32_LEAN_AND_MEAN
@@ -47,20 +43,20 @@ namespace
     constexpr uintptr_t kGaragePurchaseUnlockerVtableVA = 0x0247920C;
 
     const uint8_t kOnlineUnlockerExpected[kOnlineUnlockerPatchSize] = {
-        0x51,                   // push ecx
-        0x55,                   // push ebp
-        0x8B, 0xE9,             // mov ebp,ecx
-        0x8B, 0x55, 0x20,       // mov edx,[ebp+20h] (OfferId)
-        0x56                    // push esi
+        0x51,
+        0x55,
+        0x8B, 0xE9,
+        0x8B, 0x55, 0x20,
+        0x56
     };
 
     struct OnlineUnlocker
     {
         uint8_t pad[0x20];
-        const char* offerId;    // +0x20
-        const char* ps3Sku;     // +0x24
-        const char* xenonSku;   // +0x28
-        const char* pcSku;      // +0x2C
+        const char* offerId;
+        const char* ps3Sku;
+        const char* xenonSku;
+        const char* pcSku;
     };
 
     using OnlineUnlockerMethodFn = void (__thiscall *)(OnlineUnlocker* self);
@@ -69,33 +65,18 @@ namespace
     OnlineUnlockerMethodFn g_OriginalOnlineUnlockerMethod = nullptr;
     volatile LONG g_ObservationCount = 0;
 
-    // Test-6 runtime discovery gave us the exact OfferIds.  Keep this list
-    // intentionally narrow: content ownership only, not progression shortcuts.
+    // Runtime-discovered content ownership offers only.
     const char* const kWhitelistedOffers[] = {
-        // Heroes & Villains / preorder Challenge Series families.
         "r_carbon",
         "r_mostwanted",
         "r_underground",
         "handv_pack",
-
-        // Discontinued content pack.
         "supercar_pack",
-
-        // Dr Pepper vehicle promos.  dp_profile and dp_xp are deliberately NOT
-        // included because they affect profile/progression rather than cars.
         "dp_fordgt",
         "dp_chevrolet",
         "dp_porsche",
-
-        // Old Spice and AEM promotional content.
         "os_pack",
         "aem_adsales",
-
-        // Limited-Edition-associated free online-pass entitlement.  This is kept
-        // separate from the generic/free/purchased online-pass offers because it
-        // is the only discovered entitlement whose name is explicitly LE-linked.
-        // Test 7 will tell us whether it is actually needed for LE content.
-        "olp_le_free",
     };
 
     uintptr_t RebaseGameAddress(uintptr_t preferredVA)
@@ -133,7 +114,7 @@ namespace
         _vsnprintf_s(buffer, sizeof(buffer), _TRUNCATE, fmt, args);
         va_end(args);
 
-        HANDLE h = CreateFileA("NFSTR_SelectiveUnlocker_test7.log",
+        HANDLE h = CreateFileA("NFSTR_SelectiveUnlocker_test8.log",
                                FILE_APPEND_DATA,
                                FILE_SHARE_READ | FILE_SHARE_WRITE,
                                nullptr,
@@ -282,6 +263,8 @@ namespace
                 AppendLog("  -> ORIGINAL: GaragePurchaseUnlocker excluded\r\n");
             else if (std::strcmp(offer, "timesavers_pack") == 0)
                 AppendLog("  -> ORIGINAL: Time Savers explicitly excluded\r\n");
+            else if (std::strncmp(offer, "olp_", 4) == 0)
+                AppendLog("  -> ORIGINAL: online-pass entitlement excluded\r\n");
             else
                 AppendLog("  -> ORIGINAL: entitlement not on DLC/promo allow-list\r\n");
         }
@@ -348,8 +331,6 @@ namespace
                           reinterpret_cast<uintptr_t>(&OnlineUnlockerEntitlementHook),
                           true);
 
-        // The trampoline copied eight complete bytes.  The entry jump consumes
-        // five; NOP the remaining three so no stale partial prologue remains.
         for (size_t i = 5; i < kOnlineUnlockerPatchSize; ++i)
             injector::WriteMemory<uint8_t>(liveMethod + i, 0x90, true);
 
@@ -360,11 +341,11 @@ namespace
 
     void Init()
     {
-        DeleteFileA("NFSTR_SelectiveUnlocker_test7.log");
-        AppendLog("NFSTR Selective Unlocker test 7\r\n");
+        DeleteFileA("NFSTR_SelectiveUnlocker_test8.log");
+        AppendLog("NFSTR Selective Unlocker test 8\r\n");
         AppendLog("Visibility: neutralise IsPromoContent + IsHiddenUnlock reflection names\r\n");
-        AppendLog("Entitlements: grant only allow-listed DLC/promo OnlineUnlockers\r\n");
-        AppendLog("GaragePurchaseUnlocker + Time Savers + XP/profile + VIP/demo/online-pass controls pass through original logic.\r\n");
+        AppendLog("Entitlements: grant only allow-listed discontinued content OnlineUnlockers\r\n");
+        AppendLog("GaragePurchaseUnlocker, Time Savers, XP/profile, VIP/demo and all olp_* controls use original logic.\r\n");
         AppendLog("No generic Unlockers bypass; no blanket car/stage unlock; no Ebisu patches.\r\n\r\n");
 
         const bool promoPatched = NeutralizeReflectedBoolField(
@@ -388,7 +369,7 @@ namespace
                   entitlementHooked ? "installed" : "FAILED");
 
         OutputDebugStringA(
-            "[NFSTR_SelectiveUnlocker_test7] Whitelisted DLC/promo entitlement bypass installed.\n");
+            "[NFSTR_SelectiveUnlocker_test8] Whitelisted DLC/promo entitlement bypass installed.\n");
     }
 }
 
