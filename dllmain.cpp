@@ -1,21 +1,26 @@
 //
-// Need for Speed The Run - Selective Promo/DLC Unlocker (test 5)
+// Need for Speed The Run - Selective Promo/DLC Unlocker (test 6)
 //
-// Test 4 proved that redirecting getMatchingGarageCar callers is not the path
-// used by the View Cars lock presentation: all ten verified callers were hooked,
-// yet browsing locked cars produced no runtime records.
+// Test 6 moves away from car-side forcing and targets the game's actual
+// entitlement unlocker class.
 //
-// Test 5 moves to the two exact locked-car branches patched by Xan's original
-// Ultimate Unlocker. Unlike the original mod, these hooks DO NOT blanket-unlock
-// every car. They inspect the same Unlockable object and skip the locked path only
-// when m_isPromoContent is true. All non-promo cars stay on the original path.
+// Reverse engineering of the v1.1 Win32 type metadata shows distinct unlocker
+// classes for normal progression (LevelUpUnlocker, StageCompletionUnlocker,
+// ChallengeCompletionUnlocker, etc.) and a separate OnlineUnlocker carrying
+// OfferId / PS3Sku / XenonSku / PCSku fields.  OnlineUnlocker's stock method at
+// 0x008D0BA0 searches the entitlement list and only calls 0x007F3780 when the
+// requested offer is owned.
 //
-// The proven IsPromoContent / IsHiddenUnlock reflection-name patches are retained
-// only to keep DLC/promo entries visible. The two car-gate hooks log all adjacent
-// flags so we can determine whether that visibility patch also destroys the promo
-// discriminator.
+// This build replaces ONLY that OnlineUnlocker entitlement check with the stock
+// success action.  Normal progression unlockers are untouched.  The derived
+// GaragePurchaseUnlocker uses the same virtual method and therefore follows the
+// same entitlement-only path.
 //
-// NO generic Unlockers bypass. NO stage-select unlock. NO online/Ebisu patches.
+// The proven IsPromoContent / IsHiddenUnlock reflection-name patches are kept
+// solely to expose otherwise-hidden promo/DLC UI entries.
+//
+// NO generic Unlockers bypass. NO blanket car unlock. NO stage-select unlock.
+// NO online/Ebisu zeroing.
 //
 
 #define WIN32_LEAN_AND_MEAN
@@ -34,34 +39,40 @@ namespace
     constexpr uintptr_t kIsPromoContentVA = 0x025A3620;
     constexpr uintptr_t kIsHiddenUnlockVA = 0x025A3630;
 
-    // These are the two broad car-unlock sites used by the original Ultimate
-    // Unlocker. Both execute only after the game has already determined the car
-    // is locked. We replace exactly five bytes at each site and preserve the
-    // original instructions for non-promo cars.
-    constexpr uintptr_t kCarGate1VA = 0x0093E00D;
-    constexpr uintptr_t kCarGate1LockedContinueVA = 0x0093E012;
-    constexpr uintptr_t kCarGate1UnlockedContinueVA = 0x0093E0D8;
+    // OnlineUnlocker::entitlement-check/update method in DRM-free v1.1.
+    constexpr uintptr_t kOnlineUnlockerMethodVA = 0x008D0BA0;
 
-    constexpr uintptr_t kCarGate2VA = 0x0093F214;
-    constexpr uintptr_t kCarGate2LockedContinueVA = 0x0093F219;
-    constexpr uintptr_t kCarGate2UnlockedContinueVA = 0x0093F2A0;
+    // Stock success path used by OnlineUnlocker after an entitlement match.
+    // Call shape in the game:
+    //   ecx = *(void**)0x02882500 + 0x3CB4
+    //   push OnlineUnlocker*
+    //   call 0x007F3780
+    constexpr uintptr_t kUnlockManagerGlobalVA = 0x02882500;
+    constexpr uintptr_t kUnlockManagerOffset = 0x00003CB4;
+    constexpr uintptr_t kGrantOnlineUnlockVA = 0x007F3780;
 
-    const uint8_t kCarGate1Expected[5] = { 0x8B, 0x54, 0x24, 0x7C, 0x51 }; // mov edx,[esp+7C]; push ecx
-    const uint8_t kCarGate2Expected[5] = { 0x51, 0x8B, 0x4C, 0x24, 0x50 }; // push ecx; mov ecx,[esp+50]
+    constexpr uintptr_t kOnlineUnlockerVtableVA = 0x024791FC;
+    constexpr uintptr_t kGaragePurchaseUnlockerVtableVA = 0x0247920C;
 
-    struct Unlockable
-    {
-        uint8_t pad[0x18];
-        bool m_isUnlocked;
-        bool m_hideHowTo;
-        bool m_isHiddenUnlock;
-        bool m_isPromoContent;
+    const uint8_t kOnlineUnlockerExpected[] = {
+        0x51,                   // push ecx
+        0x55,                   // push ebp
+        0x8B, 0xE9,             // mov ebp,ecx
+        0x8B, 0x55, 0x20,       // mov edx,[ebp+20h] (OfferId)
+        0x56                    // push esi
     };
 
-    uintptr_t g_CarGate1LockedContinue = 0;
-    uintptr_t g_CarGate1UnlockedContinue = 0;
-    uintptr_t g_CarGate2LockedContinue = 0;
-    uintptr_t g_CarGate2UnlockedContinue = 0;
+    struct OnlineUnlocker
+    {
+        uint8_t pad[0x20];
+        const char* offerId;    // +0x20
+        const char* ps3Sku;     // +0x24
+        const char* xenonSku;   // +0x28
+        const char* pcSku;      // +0x2C
+    };
+
+    using GrantOnlineUnlockFn = void (__thiscall *)(void* unlockManager, OnlineUnlocker* unlocker);
+
     volatile LONG g_ObservationCount = 0;
 
     uintptr_t RebaseGameAddress(uintptr_t preferredVA)
@@ -72,6 +83,9 @@ namespace
 
     bool IsReadableRange(const void* address, size_t size)
     {
+        if (!address || size == 0)
+            return false;
+
         MEMORY_BASIC_INFORMATION mbi{};
         if (!VirtualQuery(address, &mbi, sizeof(mbi)))
             return false;
@@ -90,13 +104,13 @@ namespace
 
     void AppendLog(const char* fmt, ...)
     {
-        char buffer[512]{};
+        char buffer[1024]{};
         va_list args;
         va_start(args, fmt);
         _vsnprintf_s(buffer, sizeof(buffer), _TRUNCATE, fmt, args);
         va_end(args);
 
-        HANDLE h = CreateFileA("NFSTR_SelectiveUnlocker_test5.log",
+        HANDLE h = CreateFileA("NFSTR_SelectiveUnlocker_test6.log",
                                FILE_APPEND_DATA,
                                FILE_SHARE_READ | FILE_SHARE_WRITE,
                                nullptr,
@@ -109,6 +123,37 @@ namespace
         DWORD written = 0;
         WriteFile(h, buffer, static_cast<DWORD>(std::strlen(buffer)), &written, nullptr);
         CloseHandle(h);
+    }
+
+    void CopyReadableCString(const char* src, char* dst, size_t dstSize)
+    {
+        if (!dst || dstSize == 0)
+            return;
+
+        dst[0] = '\0';
+        if (!src)
+        {
+            strcpy_s(dst, dstSize, "<null>");
+            return;
+        }
+
+        size_t i = 0;
+        for (; i + 1 < dstSize; ++i)
+        {
+            if (!IsReadableRange(src + i, 1))
+            {
+                if (i == 0)
+                    strcpy_s(dst, dstSize, "<unreadable>");
+                return;
+            }
+
+            const char c = src[i];
+            dst[i] = c;
+            if (c == '\0')
+                return;
+        }
+
+        dst[dstSize - 1] = '\0';
     }
 
     bool NeutralizeReflectedBoolField(uintptr_t preferredStringVA, const char* expectedName)
@@ -130,120 +175,95 @@ namespace
         return true;
     }
 
-    void __cdecl ObserveUnlockable(uint32_t site, Unlockable* car)
+    void __fastcall OnlineUnlockerEntitlementHook(OnlineUnlocker* self, void* /*edx*/)
     {
-        if (!car)
-        {
-            AppendLog("gate%u car=null\r\n", site);
+        if (!self)
             return;
-        }
+
+        const uintptr_t vtable = *reinterpret_cast<const uintptr_t*>(self);
+        const uintptr_t onlineVtable = RebaseGameAddress(kOnlineUnlockerVtableVA);
+        const uintptr_t garageVtable = RebaseGameAddress(kGaragePurchaseUnlockerVtableVA);
+
+        const char* kind = "OnlineUnlocker-derived";
+        if (vtable == onlineVtable)
+            kind = "OnlineUnlocker";
+        else if (vtable == garageVtable)
+            kind = "GaragePurchaseUnlocker";
+
+        char offer[192]{};
+        char pcSku[192]{};
+        char xenonSku[192]{};
+        char ps3Sku[192]{};
+        CopyReadableCString(self->offerId, offer, sizeof(offer));
+        CopyReadableCString(self->pcSku, pcSku, sizeof(pcSku));
+        CopyReadableCString(self->xenonSku, xenonSku, sizeof(xenonSku));
+        CopyReadableCString(self->ps3Sku, ps3Sku, sizeof(ps3Sku));
 
         const LONG observation = InterlockedIncrement(&g_ObservationCount);
-        if (observation > 500)
+        if (observation <= 500)
+        {
+            AppendLog("entitlement #%ld self=%08X kind=%s offer=\"%s\" pcSku=\"%s\" xenonSku=\"%s\" ps3Sku=\"%s\"\r\n",
+                      observation,
+                      static_cast<unsigned>(reinterpret_cast<uintptr_t>(self)),
+                      kind,
+                      offer,
+                      pcSku,
+                      xenonSku,
+                      ps3Sku);
+        }
+
+        void* const rootManager = *reinterpret_cast<void**>(RebaseGameAddress(kUnlockManagerGlobalVA));
+        if (!rootManager)
+        {
+            if (observation <= 500)
+                AppendLog("  -> NOT GRANTED: unlock manager root is null\r\n");
             return;
-
-        AppendLog("gate%u car=%08X unlocked=%u hideHowTo=%u hidden=%u promo=%u action=%s\r\n",
-                  site,
-                  static_cast<unsigned>(reinterpret_cast<uintptr_t>(car)),
-                  car->m_isUnlocked ? 1u : 0u,
-                  car->m_hideHowTo ? 1u : 0u,
-                  car->m_isHiddenUnlock ? 1u : 0u,
-                  car->m_isPromoContent ? 1u : 0u,
-                  car->m_isPromoContent ? "SELECTIVE_UNLOCK" : "VANILLA_LOCKED_PATH");
-    }
-
-    // Site 1 enters with ECX = Unlockable*. The five overwritten stock bytes are:
-    //   mov edx,[esp+7C]
-    //   push ecx
-    // Non-promo entries execute those instructions and return to 0x93E012.
-    // Promo entries set +0x18 and jump to the stock already-unlocked continuation.
-    void __declspec(naked) CarGateHook1()
-    {
-        __asm
-        {
-            pushfd
-            pushad
-            push ecx
-            push 1
-            call ObserveUnlockable
-            add esp, 8
-            popad
-            popfd
-
-            cmp byte ptr [ecx + 1Bh], 0
-            je gate1_vanilla
-
-            mov byte ptr [ecx + 18h], 1
-            jmp dword ptr [g_CarGate1UnlockedContinue]
-
-        gate1_vanilla:
-            mov edx, dword ptr [esp + 7Ch]
-            push ecx
-            jmp dword ptr [g_CarGate1LockedContinue]
         }
+
+        void* const unlockManager = reinterpret_cast<uint8_t*>(rootManager) + kUnlockManagerOffset;
+        const auto grant = reinterpret_cast<GrantOnlineUnlockFn>(RebaseGameAddress(kGrantOnlineUnlockVA));
+        grant(unlockManager, self);
+
+        if (observation <= 500)
+            AppendLog("  -> GRANTED via stock OnlineUnlocker success path 0x007F3780\r\n");
     }
 
-    // Site 2 enters with EBP = Unlockable*. The five overwritten stock bytes are:
-    //   push ecx
-    //   mov ecx,[esp+50]
-    void __declspec(naked) CarGateHook2()
+    bool InstallOnlineUnlockerHook()
     {
-        __asm
+        const uintptr_t liveMethod = RebaseGameAddress(kOnlineUnlockerMethodVA);
+        if (!IsReadableRange(reinterpret_cast<const void*>(liveMethod), sizeof(kOnlineUnlockerExpected)))
         {
-            pushfd
-            pushad
-            push ebp
-            push 2
-            call ObserveUnlockable
-            add esp, 8
-            popad
-            popfd
-
-            cmp byte ptr [ebp + 1Bh], 0
-            je gate2_vanilla
-
-            mov byte ptr [ebp + 18h], 1
-            jmp dword ptr [g_CarGate2UnlockedContinue]
-
-        gate2_vanilla:
-            push ecx
-            mov ecx, dword ptr [esp + 50h]
-            jmp dword ptr [g_CarGate2LockedContinue]
-        }
-    }
-
-    bool InstallCarGateHook(uintptr_t preferredVA,
-                            const uint8_t (&expected)[5],
-                            void* hook,
-                            const char* name)
-    {
-        const uintptr_t liveVA = RebaseGameAddress(preferredVA);
-        if (!IsReadableRange(reinterpret_cast<const void*>(liveVA), sizeof(expected)))
-        {
-            AppendLog("%s FAILED: site unreadable\r\n", name);
+            AppendLog("OnlineUnlocker hook FAILED: method unreadable\r\n");
             return false;
         }
 
-        if (std::memcmp(reinterpret_cast<const void*>(liveVA), expected, sizeof(expected)) != 0)
+        if (std::memcmp(reinterpret_cast<const void*>(liveMethod),
+                        kOnlineUnlockerExpected,
+                        sizeof(kOnlineUnlockerExpected)) != 0)
         {
-            const uint8_t* bytes = reinterpret_cast<const uint8_t*>(liveVA);
-            AppendLog("%s FAILED: bytes=%02X %02X %02X %02X %02X\r\n",
-                      name, bytes[0], bytes[1], bytes[2], bytes[3], bytes[4]);
+            const uint8_t* b = reinterpret_cast<const uint8_t*>(liveMethod);
+            AppendLog("OnlineUnlocker hook FAILED: unexpected bytes %02X %02X %02X %02X %02X %02X %02X %02X\r\n",
+                      b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]);
             return false;
         }
 
-        injector::MakeJMP(liveVA, reinterpret_cast<uintptr_t>(hook), true);
-        AppendLog("%s installed at %08X\r\n", name, static_cast<unsigned>(preferredVA));
+        injector::MakeJMP(liveMethod,
+                          reinterpret_cast<uintptr_t>(&OnlineUnlockerEntitlementHook),
+                          true);
+
+        AppendLog("OnlineUnlocker entitlement hook installed at %08X\r\n",
+                  static_cast<unsigned>(kOnlineUnlockerMethodVA));
         return true;
     }
 
     void Init()
     {
-        DeleteFileA("NFSTR_SelectiveUnlocker_test5.log");
-        AppendLog("NFSTR Selective Unlocker test 5\r\n");
+        DeleteFileA("NFSTR_SelectiveUnlocker_test6.log");
+        AppendLog("NFSTR Selective Unlocker test 6\r\n");
         AppendLog("Visibility: neutralise IsPromoContent + IsHiddenUnlock reflection names\r\n");
-        AppendLog("Cars: hook Xan's two original locked-car branches; skip lock path ONLY for promo=true\r\n");
-        AppendLog("No generic Unlockers bypass; no stage unlock; no online/Ebisu patches.\r\n\r\n");
+        AppendLog("Entitlements: force ONLY OnlineUnlocker/GaragePurchaseUnlocker through stock success path\r\n");
+        AppendLog("Normal progression unlocker classes remain untouched.\r\n");
+        AppendLog("No generic Unlockers bypass; no blanket car/stage unlock; no Ebisu patches.\r\n\r\n");
 
         const bool promoPatched = NeutralizeReflectedBoolField(
             kIsPromoContentVA,
@@ -256,27 +276,12 @@ namespace
                   promoPatched ? "patched" : "FAILED",
                   hiddenPatched ? "patched" : "FAILED");
 
-        g_CarGate1LockedContinue = RebaseGameAddress(kCarGate1LockedContinueVA);
-        g_CarGate1UnlockedContinue = RebaseGameAddress(kCarGate1UnlockedContinueVA);
-        g_CarGate2LockedContinue = RebaseGameAddress(kCarGate2LockedContinueVA);
-        g_CarGate2UnlockedContinue = RebaseGameAddress(kCarGate2UnlockedContinueVA);
-
-        const bool gate1 = InstallCarGateHook(
-            kCarGate1VA,
-            kCarGate1Expected,
-            reinterpret_cast<void*>(&CarGateHook1),
-            "car gate 1");
-
-        const bool gate2 = InstallCarGateHook(
-            kCarGate2VA,
-            kCarGate2Expected,
-            reinterpret_cast<void*>(&CarGateHook2),
-            "car gate 2");
-
-        AppendLog("car gates installed=%u/2\r\n", (gate1 ? 1u : 0u) + (gate2 ? 1u : 0u));
+        const bool entitlementHooked = InstallOnlineUnlockerHook();
+        AppendLog("selective entitlement hook=%s\r\n",
+                  entitlementHooked ? "installed" : "FAILED");
 
         OutputDebugStringA(
-            "[NFSTR_SelectiveUnlocker_test5] Visibility + selective original car-gate hooks installed.\n");
+            "[NFSTR_SelectiveUnlocker_test6] Selective OnlineUnlocker entitlement bypass installed.\n");
     }
 }
 
