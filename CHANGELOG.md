@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.1.1] - 2026-09-14
+
+- Release downloads now put the ASI and INI together in one ZIP.
+- Added a SHA-256 checksum for the release ZIP.
+- No unlock behavior changed from v1.1.0.
+
 ## [1.1.0] - 2026-09-14
 
 - Added `NFSTR_UltimateUnlocker.ini`.
@@ -16,5 +22,6 @@
 - Added executable-byte checks, ASLR-aware addresses and the original-method trampoline.
 - Added `RESEARCH.md` with the reverse-engineering notes and test history.
 
+[1.1.1]: https://github.com/wefalltomorrow/NFSTR_UltimateUnlocker/releases/tag/v1.1.1
 [1.1.0]: https://github.com/wefalltomorrow/NFSTR_UltimateUnlocker/releases/tag/v1.1.0
 [1.0.0]: https://github.com/wefalltomorrow/NFSTR_UltimateUnlocker/releases/tag/v1.0.0

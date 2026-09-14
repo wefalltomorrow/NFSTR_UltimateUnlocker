@@ -6,7 +6,7 @@ The original mod unlocks basically everything. This fork keeps that option, but 
 
 ## Install
 
-Copy these two files to the folder used by your ASI loader:
+Download the latest `NFSTR_UltimateUnlocker-vX.Y.Z.zip` from Releases, extract it, then copy these two files to the folder used by your ASI loader:
 
 - `NFSTR_UltimateUnlocker.asi`
 - `NFSTR_UltimateUnlocker.ini`
