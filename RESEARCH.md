@@ -1,171 +1,413 @@
-# NFSTR Ultimate Unlocker patch map / selective-unlock research
+# NFSTR selective promo/DLC unlock research
 
-This document records what the original `xan1242/NFSTR_UltimateUnlocker` actually patches so the fork can keep useful DLC/promo behaviour without inheriting broad progression cheats.
+This document records the reverse-engineering work behind the production selective unlocker and the reasons it differs from the original broad `NFSTR_UltimateUnlocker` behavior.
 
-## Active patches in the original plugin
+The target used for the final work was the **Need for Speed: The Run v1.1.0.0 PC executable layout**.
 
-### 1. `0x00834303` and `0x0083434F` - two NOPs
+## Final design
 
-Original code:
+The production plugin does two narrowly scoped things:
+
+1. Neutralizes the reflected visibility metadata names `IsPromoContent` and `IsHiddenUnlock` so installed promotional/DLC content can appear in the UI.
+2. Hooks the game's `OnlineUnlocker` entitlement method and grants only exact, known discontinued content `OfferId` values through the game's own successful entitlement path.
+
+Everything else remains on vanilla logic.
+
+The final allow-list is:
+
+```text
+r_carbon
+r_mostwanted
+r_underground
+handv_pack
+supercar_pack
+dp_fordgt
+dp_chevrolet
+dp_porsche
+os_pack
+aem_adsales
+```
+
+Explicitly excluded from the selective grant path are ordinary `GaragePurchaseUnlocker` objects, Time Savers, XP/profile entitlements, VIP/demo flags and the `olp_*` online-pass family.
+
+---
+
+## Original Ultimate Unlocker patch map
+
+The upstream plugin applies several independent patch families. They are not all part of the same system.
+
+### `0x00834303` and `0x0083434F`
+
+Upstream:
 
 ```cpp
 injector::MakeNOP(0x834303, 2);
 injector::MakeNOP(0x83434F, 2);
 ```
 
-These are **not documented by Xan**. Previous disassembly work places both in a path that ultimately participates in `OnNetworkConnected` handling, so they look more like legacy online/offline compatibility than ordinary car/stage unlocking.
+These remain excluded from this fork. They appear related to legacy online/network-connected handling and were not needed for selective DLC ownership restoration.
 
-They are **not enabled in the selective branch**. They should be treated as a separate online research target rather than silently bundled with DLC exposure.
+### Reflected field-name patches
 
----
-
-### 2. Reflected field-name patches
-
-Original code:
+Upstream:
 
 ```cpp
-injector::WriteMemory<uint8_t>(0x25A35EC, 0, true);
-injector::WriteMemory<uint8_t>(0x25A362D, 0, true);
-injector::WriteMemory<uint8_t>(0x25A363D, 0, true);
+injector::WriteMemory<uint8_t>(0x25A35EC, 0, true); // Unlockers
+injector::WriteMemory<uint8_t>(0x25A362D, 0, true); // IsPromoContent
+injector::WriteMemory<uint8_t>(0x25A363D, 0, true); // IsHiddenUnlock
 ```
 
-They terminate the final character of three reflected field names:
+The resulting string mutations are:
 
-| Address | Original field | Result after patch | Selective branch |
+| Address | Original field | Result | Production selective build |
 |---|---|---|---|
-| `0x025A35EC` | `Unlockers` | `Unlocker` | **Removed** |
-| `0x025A362D` | `IsPromoContent` | `IsPromoConten` | **Kept** |
-| `0x025A363D` | `IsHiddenUnlock` | `IsHiddenUnloc` | **Kept** |
+| `0x025A35EC` | `Unlockers` | `Unlocker` | **Excluded** |
+| `0x025A362D` | `IsPromoContent` | `IsPromoConten` | **Included** |
+| `0x025A363D` | `IsHiddenUnlock` | `IsHiddenUnloc` | **Included** |
 
-The `Unlockers` change is a broad unlock-requirement bypass, not a Time Saver-specific patch. This is independently corroborated by NFS The Run FusionFix: its `UnlockEverything` option specifically intercepts the reflected property named `Unlockers` and substitutes an undefined property name.
+Destroying the reflected `Unlockers` property is a broad requirement bypass. FusionFix independently corroborates this idea with its `UnlockEverything` option, which intercepts the same property name. That patch is intentionally not used here.
 
-FusionFix also exposes the relevant unlockable layout:
+The two visibility fields are kept because they expose installed promotional/hidden entries without themselves satisfying progression requirements.
 
-```cpp
-bool m_isUnlocked;
-bool m_hideHowTo;
-bool m_isHiddenUnlock;
-bool m_isPromoContent;
-```
+### Broad car hooks
 
-That makes `IsPromoContent` and `IsHiddenUnlock` the two best candidates for a narrow promo/hidden-content experiment without touching `m_isUnlocked` or generic unlock requirements.
-
-The exact effect still needs in-game verification. Neutralising those fields may expose installed promo/DLC content, but the fork should not claim it grants every legitimate DLC until tested.
-
----
-
-### 3. Car unlock hooks
-
-Original hooks:
+Upstream hooks:
 
 ```text
-0x0093E00D  CarUnlockHook1
-0x0093F214  CarUnlockHook2
+0x0093E00D
+0x0093F214
 ```
 
-Both write `1` to the unlockable object's byte at offset `+0x18`, then bypass the normal locked path.
+Both write `1` to byte `+0x18` on the relevant unlockable object and bypass the stock locked path.
 
-These are the clearest **unlock-all-cars** cheats in the plugin and are completely removed from the selective branch.
+Static reflection metadata later established that the actual `Unlockable` layout for this executable is:
 
-FusionFix uses the same conceptual mechanism for its `UnlockAllCars` option: it forces `m_isUnlocked = true` on the matching garage car.
+```text
++0x10 Icon
++0x14 DisplayString
++0x18 IsRunTimeUnlocked
++0x19 IsUnlocked
++0x1A HideHowTo
++0x1B IsHiddenUnlock
++0x1C IsPromoContent
+```
 
----
+Therefore the upstream `+0x18` write sets `IsRunTimeUnlocked`, not the reflected persistent `IsUnlocked` byte.
 
-### 4. Stage-select unlocks
+These hooks are completely excluded from the selective production build.
 
-Original code:
+### Stage-select patches
+
+Upstream:
 
 ```cpp
 injector::MakeNOP(0x930C00, 2);
 injector::MakeNOP(0x9313A2, 2);
 ```
 
-Xan explicitly labels these `stage select unlock`.
+These are broad stage-selection unlocks and are excluded.
 
-They are completely removed from the selective branch so Story / stage / Challenge Series progression is not bypassed.
+### Commented network/Ebisu code
 
-FusionFix separately has an `UnlockChallenges` system that forces UI `isLocked` / `IsUnlocked` values, reinforcing that challenge/stage unlocking is a distinct patch family from promo/hidden content.
+The original repository also contains commented-out network and Ebisu/Autolog patches, including a NOP near `0x00DD76CB` and a group of return-zero stubs around `0x018AEF80`–`0x018AF640`.
 
----
-
-## Commented / inactive code in the original repository
-
-None of the following is active in the published Ultimate Unlocker binary/source as currently committed.
-
-### `0x00DD76CB` network NOP
-
-```cpp
-// injector::MakeNOP(0xDD76CB, 2); // something with network?
-```
-
-Xan's own comment is uncertain. Do not enable this until the surrounding function and branch condition are identified.
-
-### Ebisu / Autolog return-zero stubs
-
-The source contains a commented block that would replace these functions with a function returning `0`:
-
-```text
-0x018AEF80
-0x018AF060
-0x018AF0E0
-0x018AF160
-0x018AF1E0
-0x018AF260
-0x018AF2D0
-0x018AF340
-0x018AF3A0
-0x018AF420
-0x018AF460
-0x018AF4A0
-0x018AF520
-0x018AF5B0
-0x018AF640
-```
-
-The block is labelled `Ebisu / Autolog stuff`, but there are no function names, signatures or behavioural notes. Returning zero from all of them wholesale would be an aggressive compatibility hack, so the selective branch deliberately leaves them alone.
-
-For an offline-only player, the safer current direction is the structured `NfsOnlineSettings` work in the separate `NFS-TheRun-DE` research branch: disable explicit Autolog/telemetry/matchmaking/VOIP/fallback/upload settings while leaving Frostbite core networking untouched. That is more targeted than blindly replacing fifteen unknown functions with `return 0`.
-
-The Ebisu addresses are still worth reverse-engineering individually. Useful candidates would be routines that only perform dead service connection, telemetry or Autolog requests; anything involved in profile, event flow or local UI should not be bypassed.
+They remain excluded. They were not required for the entitlement fix and should be treated as a separate offline-service compatibility research area.
 
 ---
 
-## Other Xan NFSTR repository checked
+## Reflection metadata breakthrough
 
-`xan1242/NFSTR_Loadless` is **not a faster-loading patch**. It hooks loading/start/continue/stage events and exposes boolean/counter state for speedrunning / LiveSplit loadless timing. It is useful tooling for speedrunners and possibly for detecting loading state in future mods, but it does not itself shorten game load times.
+The v1.1 executable contains Frostbite runtime reflection metadata rather than merely leftover debug names. Parsing the `typeinfo`, `fieldinf` and constructor-table data exposed the unlocker class hierarchy and field layouts.
 
-A potentially useful idea from it is the **loading-state detector**: if another feature needs to act only during genuine loading, those hooks/patterns may provide a better signal than guessing from FPS or menu state.
+Relevant unlocker classes include:
+
+```text
+Win32Unlocker
+PS3NAUnlocker
+GaragePurchaseUnlocker
+OnlineUnlocker
+NewsReadUnlocker
+PhotoUploadedUnlocker
+SpeedWallLeaderUnlocker
+RecommendsUnlocker
+ChallengePackCompletionCountUnlocker
+ChallengePackCompletionUnlocker
+StoryModeCompletionUnlocker
+ChallengeCompletionUnlocker
+StageCompletionUnlocker
+FinishPositionUnlocker
+AccoladeUnlocker
+CarMileageUnlocker
+LevelUpUnlocker
+CompleteObjectiveUnlocker
+AnyXObjectivesCompleteUnlocker
+XPlaygroupObjectivesCompleteUnlocker
+XObjectivesCompleteUnlocker
+NullUnlocker
+```
+
+There is no separate `DLCOwnedUnlocker`, `PromoOwnedUnlocker` or `PreorderOwnedUnlocker`. The entitlement role is handled by `OnlineUnlocker`.
+
+### `Unlockable`
+
+```text
+IsRunTimeUnlocked +0x18
+IsUnlocked        +0x19
+HideHowTo         +0x1A
+IsHiddenUnlock    +0x1B
+IsPromoContent    +0x1C
+DisplayString     +0x14
+Icon              +0x10
+```
+
+### `Unlocker`
+
+```text
+HowToDesc    +0x10
+Unlockables  +0x14
+Unhideables  +0x18
+LogUnlock    +0x1C
+```
+
+### `UnlockerArray`
+
+```text
+Unlockers +0x00
+```
+
+This explains why deleting the reflected `Unlockers` property behaves like a global requirement bypass.
+
+### `OnlineUnlocker`
+
+`OnlineUnlocker` has size `0x30` and the following entitlement fields:
+
+```text
+OfferId   +0x20
+PS3Sku    +0x24
+XenonSku  +0x28
+PCSku     +0x2C
+```
+
+### Other progression examples
+
+`LevelUpUnlocker`:
+
+```text
+Level +0x20
+```
+
+`StageCompletionUnlocker`:
+
+```text
+Stage         +0x20
+AttemptNumber +0x24
+```
+
+`ChallengeCompletionUnlocker`:
+
+```text
+Challenge +0x20
+```
+
+These distinct classes are why the final implementation can leave normal progression untouched rather than trying to infer progression from car metadata.
 
 ---
 
-## Current selective branch policy
+## Vtables and constructors
 
-The branch `selective-promo-dlc` currently applies only:
-
-```text
-IsPromoContent  -> neutralised
-IsHiddenUnlock  -> neutralised
-```
-
-It deliberately does **not** apply:
+Relevant vtables:
 
 ```text
-Unlockers bypass
-CarUnlockHook1
-CarUnlockHook2
-stage select unlock NOPs
-0x834303 / 0x83434F online NOPs
-0xDD76CB network NOP
-Ebisu / Autolog return-zero stubs
+OnlineUnlocker          0x024791FC
+GaragePurchaseUnlocker  0x0247920C
+PS3NAUnlocker           0x0247921C
+Win32Unlocker           0x0247922C
 ```
 
-This gives us the cleanest possible A/B test for the user's goal: installed promotional/hidden DLC content should become available if those two flags are the relevant gate, while normal cars/stages/challenges should continue following ordinary progression.
+Relevant constructor/type factory functions:
 
-## Next research steps
+```text
+OnlineUnlocker           0x02252E90
+GaragePurchaseUnlocker   0x02252F00
+PS3NAUnlocker            0x02252F70
+Win32Unlocker            0x02252FC0
+LevelUpUnlocker          0x022529F0
+StageCompletionUnlocker  0x02252BA0
+ChallengeCompletion      0x02252C00
+```
 
-1. Build and test the two-field selective plugin.
-2. Confirm which promo/DLC items appear and confirm ordinary progression remains locked.
-3. If some legitimate DLC is still missing, identify its specific gating field/event rather than restoring generic `Unlockers` or car/stage bypasses.
-4. Reverse-engineer `0x834303`, `0x83434F` and `0xDD76CB` as a separate online/offline compatibility task.
-5. Map the fifteen Ebisu/Autolog functions one at a time before deciding whether any belong in the Definitive Edition offline mode.
-6. Consider reusing `NFSTR_Loadless`'s loading-state hooks only where a reliable loading-only signal is genuinely useful.
+A critical detail is that `GaragePurchaseUnlocker` derives from / shares the stock entitlement method used by `OnlineUnlocker`. A hook that blindly grants every call to that method therefore also unlocks ordinary garage cars. The production implementation prevents this by requiring the object's vtable to match the exact `OnlineUnlocker` vtable before considering an `OfferId` for the allow-list.
+
+---
+
+## Stock entitlement path
+
+The stock `OnlineUnlocker` method begins at:
+
+```text
+0x008D0BA0
+```
+
+Its original first eight bytes in the validated executable are:
+
+```text
+51 55 8B E9 8B 55 20 56
+```
+
+The method reads `this+0x20` (`OfferId`), performs entitlement lookup/validation, and on success reaches the game's unlock manager.
+
+The successful entitlement path ultimately calls:
+
+```text
+0x007F3780
+```
+
+with the unlock manager located from:
+
+```text
+*(void**)0x02882500 + 0x3CB4
+```
+
+The production plugin therefore does not manually set car unlock bytes. For allow-listed content it calls the game's own successful grant routine with the original `OnlineUnlocker` object.
+
+For all non-target calls, a trampoline executes the original bytes and returns to the stock function so vanilla behavior is preserved.
+
+---
+
+## Runtime-discovered entitlement IDs
+
+Instrumentation in the late test builds exposed the actual runtime offers.
+
+Known content offers selected for the production allow-list:
+
+```text
+r_carbon
+r_mostwanted
+r_underground
+handv_pack
+supercar_pack
+dp_fordgt
+dp_chevrolet
+dp_porsche
+os_pack
+aem_adsales
+```
+
+Other observed online offers deliberately left vanilla included:
+
+```text
+timesavers_pack
+dp_profile
+dp_xp
+vip_world
+vip_hp
+vip_shift2
+vip_hpios
+vip_nfs12ios
+demo_nfs12
+demo_referral
+olp_free
+olp_le_free
+olp_purchase
+```
+
+The `olp_*` trio behaved as a separate online-pass family. `olp_le_free` was temporarily tested because of its `le` name, then removed; Limited Edition content remained available without it, confirming it was unnecessary for the desired DLC/promo restoration.
+
+Many ordinary cars appeared as `GaragePurchaseUnlocker` offers such as:
+
+```text
+g_bmw_1m_cou_11
+g_che_el_cam_70
+g_for_mus_302_69
+...
+```
+
+This provided direct runtime proof that globally granting the shared method would be too broad.
+
+---
+
+## Test history
+
+### Test 1 — visibility only
+
+Neutralized `IsPromoContent` and `IsHiddenUnlock`.
+
+Result: promo/DLC entries became visible, but ownership-gated content remained locked. Normal progression remained intact.
+
+Conclusion: visibility metadata is necessary for presentation but is not the ownership gate.
+
+### Tests 2–4 — garage matching hooks
+
+Experiments around `getMatchingGarageCar` and its callers produced no useful runtime observations while browsing the relevant car UI.
+
+Conclusion: that path was not authoritative for the ownership state being investigated.
+
+### Test 5 — upstream broad car branches
+
+Hooked the two original car branches selectively.
+
+Result: no useful runtime execution in the target browsing path. This path was retired.
+
+### Test 6 — grant every call to the shared entitlement method
+
+This was the major breakthrough. Limited Edition / promo ownership content became available, proving the correct entitlement routine had been found.
+
+However, ordinary progression cars such as the BMW 1M and Cesar DeLeon El Camino also became available because `GaragePurchaseUnlocker` shares that method. `timesavers_pack` was also observed on the same path.
+
+Conclusion: the target was correct, but subtype and offer discrimination were required.
+
+### Test 7 — exact subtype + allow-list
+
+Restricted grants to exact `OnlineUnlocker` objects and selected content `OfferId` values. All `GaragePurchaseUnlocker` calls returned to the original game logic.
+
+Result: desired promo/DLC ownership content became available while level, boss, challenge-medal, multiplayer-objective and Autolog requirements remained locked normally.
+
+### Test 8 — remove `olp_le_free`
+
+Removed the provisional `olp_le_free` grant.
+
+Result: Limited Edition content remained available and progression remained correct.
+
+Conclusion: `olp_le_free` belongs with the online-pass family and is not needed for the selective content restoration.
+
+Test 8 became the basis of the production implementation.
+
+---
+
+## Production safety properties
+
+The production code intentionally includes several guardrails:
+
+- Rebased addresses are used relative to the executable image base.
+- The target method bytes are verified before patching.
+- The original method is preserved through a trampoline.
+- Only the exact `OnlineUnlocker` vtable is eligible for forced entitlement success.
+- Offer matching is exact-string allow-list matching.
+- If the stock unlock manager is unavailable, the hook falls back to original behavior.
+- `GaragePurchaseUnlocker` and all unrelated offers remain vanilla.
+
+The plugin does not use the broad `Unlockers` bypass, car-unlock hooks, stage-select NOPs or Ebisu/Autolog stubs.
+
+---
+
+## Related projects / references
+
+### NFS The Run FusionFix
+
+FusionFix independently corroborated that the generic `Unlockers` property is associated with broad requirement bypass behavior and that challenge UI unlocking is a separate mechanism.
+
+One correction discovered during this work: a FusionFix-style `Unlockable` struct used during early experiments treated `+0x18` as `IsUnlocked`; the executable's reflected metadata shows `+0x18` is actually `IsRunTimeUnlocked`, with `IsUnlocked` at `+0x19` and `IsPromoContent` at `+0x1C`.
+
+### NFSTR_Loadless
+
+`xan1242/NFSTR_Loadless` is a speedrunning/load-state tool, not a faster-loading patch. Its event hooks may still be useful as references for future Definitive Edition work that needs reliable loading-state detection.
+
+### ALI213 Limited Edition crack
+
+A historical ALI213 release advertised full Limited Edition unlocking, but its executable is heavily packed and reconstructs the original Frostbite sections at runtime. Static comparison was therefore less useful than following the unprotected v1.1 executable's reflection metadata and entitlement path directly.
+
+---
+
+## Definitive Edition note
+
+The standalone ASI is intended to remain the reference implementation for this feature. The same narrow logic can later be folded into the broader **Need for Speed: The Run Definitive Edition** patch without carrying over the original Ultimate Unlocker's global progression cheats.
