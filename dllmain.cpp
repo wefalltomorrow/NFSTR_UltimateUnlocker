@@ -1,20 +1,6 @@
 //
-// Need for Speed: The Run - Selective Promo/DLC Unlocker
-//
-// Production implementation derived from the validated test 8 behavior.
-//
-// Purpose:
-//   * expose installed hidden/promo content;
-//   * satisfy only known discontinued DLC/promo ownership entitlements;
-//   * preserve the game's normal progression and reward requirements.
-//
-// Deliberately NOT bypassed:
-//   * GaragePurchaseUnlocker / ordinary car progression;
-//   * driver level, stage, boss, challenge medal, multiplayer objective,
-//     Autolog and other progression unlockers;
-//   * Time Savers, profile/XP grants, VIP/demo flags and online-pass offers;
-//   * generic Unlockers[] handling;
-//   * stage-select, blanket car-unlock or Ebisu/Autolog patches.
+// Need for Speed: The Run - Ultimate Unlocker
+// Fork of xan1242/NFSTR_UltimateUnlocker
 //
 
 #define WIN32_LEAN_AND_MEAN
@@ -23,11 +9,13 @@
 #include <cstring>
 
 #include "includes/injector/injector.hpp"
+#include "includes/injector/assembly.hpp"
 
 namespace
 {
     constexpr uintptr_t kPreferredImageBase = 0x00400000;
 
+    constexpr uintptr_t kUnlockersVA = 0x025A35E4;
     constexpr uintptr_t kIsPromoContentVA = 0x025A3620;
     constexpr uintptr_t kIsHiddenUnlockVA = 0x025A3630;
 
@@ -37,7 +25,6 @@ namespace
     constexpr uintptr_t kUnlockManagerGlobalVA = 0x02882500;
     constexpr uintptr_t kUnlockManagerOffset = 0x00003CB4;
     constexpr uintptr_t kGrantOnlineUnlockVA = 0x007F3780;
-
     constexpr uintptr_t kOnlineUnlockerVtableVA = 0x024791FC;
 
     const uint8_t kOnlineUnlockerExpected[kOnlineUnlockerPatchSize] = {
@@ -46,6 +33,12 @@ namespace
         0x8B, 0xE9,
         0x8B, 0x55, 0x20,
         0x56
+    };
+
+    struct Settings
+    {
+        bool unlockDLC = true;
+        bool unlockAll = false;
     };
 
     struct OnlineUnlocker
@@ -60,10 +53,10 @@ namespace
     using OnlineUnlockerMethodFn = void (__thiscall *)(OnlineUnlocker* self);
     using GrantOnlineUnlockFn = void (__thiscall *)(void* unlockManager, OnlineUnlocker* unlocker);
 
+    Settings g_Settings{};
     OnlineUnlockerMethodFn g_OriginalOnlineUnlockerMethod = nullptr;
 
-    // Validated discontinued content-ownership offers only.
-    const char* const kWhitelistedOffers[] = {
+    const char* const kDlcOffers[] = {
         "r_carbon",
         "r_mostwanted",
         "r_underground",
@@ -130,14 +123,80 @@ namespace
         return false;
     }
 
-    bool IsWhitelistedOffer(const char* offer)
+    void BuildIniPath(HMODULE module, char* outPath, size_t outSize)
+    {
+        if (!outPath || outSize == 0)
+            return;
+
+        outPath[0] = '\0';
+
+        const DWORD length = GetModuleFileNameA(module, outPath, static_cast<DWORD>(outSize));
+        if (length == 0 || length >= outSize)
+        {
+            const char fallback[] = ".\\NFSTR_UltimateUnlocker.ini";
+            if (sizeof(fallback) <= outSize)
+                std::memcpy(outPath, fallback, sizeof(fallback));
+            return;
+        }
+
+        char* slash = std::strrchr(outPath, '\\');
+        const char iniName[] = "NFSTR_UltimateUnlocker.ini";
+
+        if (!slash)
+        {
+            if (sizeof(iniName) <= outSize)
+                std::memcpy(outPath, iniName, sizeof(iniName));
+            return;
+        }
+
+        ++slash;
+        const size_t prefixLength = static_cast<size_t>(slash - outPath);
+        if (prefixLength + sizeof(iniName) <= outSize)
+            std::memcpy(slash, iniName, sizeof(iniName));
+    }
+
+    Settings LoadSettings(HMODULE module)
+    {
+        Settings settings{};
+        char iniPath[MAX_PATH]{};
+        BuildIniPath(module, iniPath, sizeof(iniPath));
+
+        settings.unlockDLC = GetPrivateProfileIntA(
+            "UNLOCKS", "UnlockDLC", settings.unlockDLC ? 1 : 0, iniPath) != 0;
+        settings.unlockAll = GetPrivateProfileIntA(
+            "UNLOCKS", "UnlockAll", settings.unlockAll ? 1 : 0, iniPath) != 0;
+
+        return settings;
+    }
+
+    bool IsDlcOffer(const char* offer)
     {
         if (!offer || !offer[0])
             return false;
 
-        for (const char* allowed : kWhitelistedOffers)
+        for (const char* allowed : kDlcOffers)
         {
             if (std::strcmp(offer, allowed) == 0)
+                return true;
+        }
+
+        return false;
+    }
+
+    bool ShouldGrantOffer(const char* offer)
+    {
+        if (!offer || !offer[0])
+            return false;
+
+        if (g_Settings.unlockDLC && IsDlcOffer(offer))
+            return true;
+
+        if (g_Settings.unlockAll)
+        {
+            if (IsDlcOffer(offer))
+                return true;
+
+            if (std::strcmp(offer, "timesavers_pack") == 0)
                 return true;
         }
 
@@ -201,13 +260,11 @@ namespace
         const uintptr_t vtable = *reinterpret_cast<const uintptr_t*>(self);
         const uintptr_t onlineVtable = RebaseGameAddress(kOnlineUnlockerVtableVA);
 
-        // Only the exact OnlineUnlocker subtype is eligible. Derived types such as
-        // GaragePurchaseUnlocker must continue through the original game logic.
         if (vtable == onlineVtable)
         {
             char offer[128]{};
             if (CopyReadableCString(self->offerId, offer, sizeof(offer)) &&
-                IsWhitelistedOffer(offer) &&
+                ShouldGrantOffer(offer) &&
                 GrantThroughStockSuccessPath(self))
             {
                 return;
@@ -277,21 +334,77 @@ namespace
         return true;
     }
 
-    void Init()
+    bool ApplyUnlockAllPatches()
     {
-        const bool visibilityPatched = PatchVisibilityMetadata();
-        const bool entitlementHooked = InstallOnlineUnlockerHook();
+        static constexpr char kUnlockersName[] = "Unlockers";
 
-        if (visibilityPatched && entitlementHooked)
+        char* const unlockers = reinterpret_cast<char*>(RebaseGameAddress(kUnlockersVA));
+        const uintptr_t carHook1 = RebaseGameAddress(0x0093E00D);
+        const uintptr_t carHook2 = RebaseGameAddress(0x0093F214);
+
+        if (!IsReadableRange(unlockers, sizeof(kUnlockersName)) ||
+            std::memcmp(unlockers, kUnlockersName, sizeof(kUnlockersName)) != 0 ||
+            !IsReadableRange(reinterpret_cast<void*>(RebaseGameAddress(0x00834303)), 2) ||
+            !IsReadableRange(reinterpret_cast<void*>(RebaseGameAddress(0x0083434F)), 2) ||
+            !IsReadableRange(reinterpret_cast<void*>(carHook1), 6) ||
+            !IsReadableRange(reinterpret_cast<void*>(carHook2), 6) ||
+            !IsReadableRange(reinterpret_cast<void*>(RebaseGameAddress(0x00930C00)), 2) ||
+            !IsReadableRange(reinterpret_cast<void*>(RebaseGameAddress(0x009313A2)), 2))
         {
-            OutputDebugStringA(
-                "[NFSTR_SelectiveUnlocker] Selective DLC/promo unlocker installed.\n");
+            return false;
         }
+
+        injector::MakeNOP(RebaseGameAddress(0x00834303), 2);
+        injector::MakeNOP(RebaseGameAddress(0x0083434F), 2);
+        injector::WriteMemory<uint8_t>(RebaseGameAddress(0x025A35EC), 0, true);
+
+        struct CarUnlockHook1
+        {
+            void operator()(injector::reg_pack& regs)
+            {
+                *(uint8_t*)(regs.ecx + 0x18) = 1;
+            }
+        };
+
+        injector::MakeInline<CarUnlockHook1>(carHook1, carHook1 + 6);
+        injector::MakeJMP(carHook1 + 6, RebaseGameAddress(0x0093E0D8));
+
+        struct CarUnlockHook2
+        {
+            void operator()(injector::reg_pack& regs)
+            {
+                *(uint8_t*)(regs.ebp + 0x18) = 1;
+            }
+        };
+
+        injector::MakeInline<CarUnlockHook2>(carHook2, carHook2 + 6);
+        injector::MakeJMP(carHook2 + 6, RebaseGameAddress(0x0093F2A0));
+
+        injector::MakeNOP(RebaseGameAddress(0x00930C00), 2);
+        injector::MakeNOP(RebaseGameAddress(0x009313A2), 2);
+
+        return true;
+    }
+
+    void Init(HMODULE module)
+    {
+        g_Settings = LoadSettings(module);
+
+        bool ok = true;
+
+        if (g_Settings.unlockDLC || g_Settings.unlockAll)
+            ok = PatchVisibilityMetadata() && ok;
+
+        if (g_Settings.unlockDLC || g_Settings.unlockAll)
+            ok = InstallOnlineUnlockerHook() && ok;
+
+        if (g_Settings.unlockAll)
+            ok = ApplyUnlockAllPatches() && ok;
+
+        if (ok)
+            OutputDebugStringA("[NFSTR_UltimateUnlocker] Loaded.\n");
         else
-        {
-            OutputDebugStringA(
-                "[NFSTR_SelectiveUnlocker] Compatibility check failed; one or more patches were not installed.\n");
-        }
+            OutputDebugStringA("[NFSTR_UltimateUnlocker] Compatibility check failed; one or more patches were not installed.\n");
     }
 }
 
@@ -300,7 +413,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID /*lpReserved*/)
     if (reason == DLL_PROCESS_ATTACH)
     {
         DisableThreadLibraryCalls(hModule);
-        Init();
+        Init(hModule);
     }
 
     return TRUE;
