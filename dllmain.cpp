@@ -38,7 +38,6 @@ namespace
     struct Settings
     {
         bool unlockDLC = true;
-        bool unlockTimeSavers = false;
         bool unlockAll = false;
     };
 
@@ -164,8 +163,6 @@ namespace
 
         settings.unlockDLC = GetPrivateProfileIntA(
             "UNLOCKS", "UnlockDLC", settings.unlockDLC ? 1 : 0, iniPath) != 0;
-        settings.unlockTimeSavers = GetPrivateProfileIntA(
-            "UNLOCKS", "UnlockTimeSavers", settings.unlockTimeSavers ? 1 : 0, iniPath) != 0;
         settings.unlockAll = GetPrivateProfileIntA(
             "UNLOCKS", "UnlockAll", settings.unlockAll ? 1 : 0, iniPath) != 0;
 
@@ -194,8 +191,14 @@ namespace
         if (g_Settings.unlockDLC && IsDlcOffer(offer))
             return true;
 
-        if (g_Settings.unlockTimeSavers && std::strcmp(offer, "timesavers_pack") == 0)
-            return true;
+        if (g_Settings.unlockAll)
+        {
+            if (IsDlcOffer(offer))
+                return true;
+
+            if (std::strcmp(offer, "timesavers_pack") == 0)
+                return true;
+        }
 
         return false;
     }
@@ -398,7 +401,7 @@ namespace
         if (g_Settings.unlockDLC || g_Settings.unlockAll)
             ok = PatchVisibilityMetadata() && ok;
 
-        if (g_Settings.unlockDLC || g_Settings.unlockTimeSavers)
+        if (g_Settings.unlockDLC || g_Settings.unlockAll)
             ok = InstallOnlineUnlockerHook() && ok;
 
         if (g_Settings.unlockAll)
