@@ -3,12 +3,11 @@
 ## [1.1.0] - 2026-09-14
 
 - Added `NFSTR_UltimateUnlocker.ini`.
-- Added separate `UnlockDLC`, `UnlockTimeSavers` and `UnlockAll` options.
-- `UnlockDLC=1` keeps the selective DLC/promo entitlement fix while preserving normal progression.
-- `UnlockTimeSavers=1` grants the game's `timesavers_pack` entitlement.
-- `UnlockAll=1` restores the original broad Ultimate Unlocker patches from xan1242's project.
-- Renamed the release binary back to `NFSTR_UltimateUnlocker.asi` now that the plugin supports both selective and full-unlock modes.
-- Rewrote the README to match the original project/fork style and document the new config.
+- Added two simple modes: `UnlockDLC` and `UnlockAll`.
+- `UnlockDLC=1` restores the old DLC/preorder/promo content without skipping normal progression.
+- `UnlockAll=1` enables the original broad Ultimate Unlocker behavior and the Time Savers entitlement.
+- Renamed the release binary back to `NFSTR_UltimateUnlocker.asi`.
+- Simplified the README and INI comments for normal users.
 
 ## [1.0.0] - 2026-09-14
 
