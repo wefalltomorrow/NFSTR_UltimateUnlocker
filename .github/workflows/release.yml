@@ -31,7 +31,10 @@ jobs:
           "TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append
 
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
-          if ($LASTEXITCODE -eq 0) {
+          $releaseExists = ($LASTEXITCODE -eq 0)
+          $global:LASTEXITCODE = 0
+
+          if ($releaseExists) {
             "RELEASE_EXISTS=true" | Out-File -FilePath $env:GITHUB_ENV -Append
             Write-Host "Release $tag already exists; nothing to publish."
           }
