@@ -9,6 +9,7 @@
 #include <cstring>
 
 #include "includes/injector/injector.hpp"
+#include "includes/injector/assembly.hpp"
 
 namespace
 {
