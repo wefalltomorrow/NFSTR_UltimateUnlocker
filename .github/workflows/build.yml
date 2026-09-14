@@ -6,7 +6,12 @@ on:
       - master
       - selective-promo-dlc-production
   pull_request:
+    branches:
+      - master
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -15,6 +20,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Read version
+        shell: pwsh
+        run: |
+          $version = (Get-Content .\VERSION -Raw).Trim()
+          if (-not $version) {
+            throw 'VERSION is empty.'
+          }
+          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Set up MSBuild
         uses: microsoft/setup-msbuild@v2
@@ -36,20 +50,21 @@ jobs:
           }
 
           $outName = 'NFSTR_SelectiveUnlocker.asi'
-          Copy-Item $asi.FullName "$env:GITHUB_WORKSPACE\$outName" -Force
+          $outPath = Join-Path $env:GITHUB_WORKSPACE $outName
+          Copy-Item $asi.FullName $outPath -Force
 
-          $hash = (Get-FileHash "$env:GITHUB_WORKSPACE\$outName" -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  $outName" | Set-Content "$env:GITHUB_WORKSPACE\$outName.sha256.txt"
+          $hash = (Get-FileHash $outPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $outName" | Set-Content "$outPath.sha256.txt"
 
           "OUT_NAME=$outName" | Out-File -FilePath $env:GITHUB_ENV -Append
           Write-Host "Built: $($asi.FullName)"
           Write-Host "Output: $outName"
           Write-Host "SHA-256: $hash"
 
-      - name: Upload production ASI
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: NFSTR-SelectiveUnlocker-production
+          name: NFSTR-SelectiveUnlocker-v${{ env.VERSION }}
           path: |
             ${{ env.OUT_NAME }}
             ${{ env.OUT_NAME }}.sha256.txt
