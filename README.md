@@ -2,23 +2,22 @@
 
 Fork of [xan1242/NFSTR_UltimateUnlocker](https://github.com/xan1242/NFSTR_UltimateUnlocker) for the DRM-free **Need for Speed: The Run v1.1.0.0** executable.
 
-The original mod just unlocked everything. This fork keeps that option, but also adds a cleaner mode for restoring the old DLC/preorder/promo content without skipping normal game progression.
+The original mod unlocks basically everything. This fork keeps that option, but also lets you unlock just the old DLC/preorder/promo content so you can still play through the game normally.
 
 ## Install
 
-Copy these files to the folder your ASI loader uses for The Run:
+Copy these two files to the folder used by your ASI loader:
 
 - `NFSTR_UltimateUnlocker.asi`
 - `NFSTR_UltimateUnlocker.ini`
 
-Don't load another copy of the original Ultimate Unlocker at the same time.
+Don't load this together with another copy of the original Ultimate Unlocker.
 
-## Config
+## Settings
 
 ```ini
 [UNLOCKS]
 UnlockDLC = 1
-UnlockTimeSavers = 0
 UnlockAll = 0
 ```
 
@@ -26,46 +25,31 @@ UnlockAll = 0
 
 Default: `1`
 
-Restores the discontinued DLC, preorder and promo entitlements we found in the PC executable, while leaving normal unlock requirements alone.
+Turns on the old DLC, preorder and promo content that can no longer be unlocked normally.
 
 This includes the Carbon, Most Wanted and Underground preorder content, Heroes & Villains, Supercar, Dr Pepper, Old Spice and AEM content.
 
-Cars that still have a normal requirement (driver level, boss win, challenge gold medal, multiplayer objective, Autolog recommendations, etc.) will still require it.
+Normal unlock requirements still work. For example, cars that need a certain driver level, boss win, challenge medal, multiplayer objective or Autolog recommendation will still need those requirements.
 
-### UnlockTimeSavers
-
-Default: `0`
-
-Enables the game's `timesavers_pack` entitlement.
-
-This is separate from `UnlockAll`, so you can turn the Time Savers entitlement on or off independently.
+If you want to play through the game normally, leave this on and keep `UnlockAll` off.
 
 ### UnlockAll
 
 Default: `0`
 
-Enables the original broad Ultimate Unlocker behavior from xan1242's project, including the blanket car/challenge/stage unlock patches.
+Turns on the original full Ultimate Unlocker behavior and also enables the Time Savers entitlement.
 
-If you want the old "unlock everything" setup plus the Time Savers entitlement, use:
-
-```ini
-[UNLOCKS]
-UnlockDLC = 1
-UnlockTimeSavers = 1
-UnlockAll = 1
-```
+This unlocks cars, challenges, stage select and the other broad unlocks from the original mod. Use this if you just want everything unlocked.
 
 ## Notes
 
-`UnlockDLC = 1` is the recommended setup if you still want to play through the game normally.
+The DLC-only mode uses the game's own DLC entitlement system instead of forcing every car to be unlocked. That's why normal progression still works with `UnlockDLC = 1`.
 
-The DLC mode works by handling the game's `OnlineUnlocker` entitlement checks for a small list of known discontinued offers. `GaragePurchaseUnlocker` and the normal progression unlockers are left alone.
-
-The current code is built around the DRM-free v1.1.0.0 PC executable layout. It checks the expected `OnlineUnlocker` bytes before installing that hook.
+The current build is made for the DRM-free v1.1.0.0 PC executable layout.
 
 For the reverse-engineering notes and test history, see [RESEARCH.md](RESEARCH.md).
 
-This code will also be used later as the unlocker part of our NFS The Run Definitive Edition patch.
+This code is also planned to be used later in our NFS The Run Definitive Edition patch.
 
 ## Building
 
@@ -74,7 +58,7 @@ Build `NFSTR_UltimateUnlocker.sln` as **Release | x86**.
 ## Credits
 
 - **xan1242 / Lovro Pleše** - original Ultimate Unlocker and injector implementation
-- **ThirteenAG** - NFS The Run FusionFix, which was useful as a reference while tracing the unlock system
+- **ThirteenAG** - NFS The Run FusionFix, useful as a reference while tracing the unlock system
 - **wefalltomorrow** - DLC entitlement research/testing and this fork
 
 ## License
