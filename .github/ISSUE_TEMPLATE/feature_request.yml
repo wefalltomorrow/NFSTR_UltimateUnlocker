@@ -1,39 +1,26 @@
-name: Feature / entitlement request
-description: Propose another content entitlement or compatibility improvement
+name: Feature request
+description: Suggest an unlocker feature or compatibility improvement
 title: "[Request] "
 labels: []
 body:
-  - type: markdown
+  - type: textarea
+    id: request
     attributes:
-      value: |
-        This project intentionally avoids broad unlock-all behavior. Requests should identify a specific piece of content or compatibility problem and explain why it belongs in the selective scope.
-
-  - type: input
-    id: content
-    attributes:
-      label: Content / feature
-      description: Name the exact car, pack, challenge series, entitlement, executable build or compatibility target.
+      label: What would you like added?
+      description: Describe the feature, content or compatibility change.
     validations:
       required: true
 
   - type: textarea
-    id: evidence
+    id: reason
     attributes:
-      label: Evidence
-      description: Include known OfferIds/SKUs, screenshots, runtime logs, executable hashes, historical release information or other evidence if available.
+      label: Why would it be useful?
+      description: A short explanation is enough.
     validations:
       required: true
 
   - type: textarea
-    id: progression
+    id: info
     attributes:
-      label: Progression impact
-      description: Explain what normal progression requirements must remain untouched.
-
-  - type: checkboxes
-    id: scope
-    attributes:
-      label: Scope check
-      options:
-        - label: This is not a request to globally unlock all cars/stages/challenges.
-          required: true
+      label: Extra info
+      description: Add screenshots, OfferIds, executable hashes, links or anything else that might help.

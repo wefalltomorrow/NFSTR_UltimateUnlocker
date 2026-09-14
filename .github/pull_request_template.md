@@ -1,33 +1,17 @@
-## Summary
+## What changed?
 
-Describe what this PR changes and why.
+Briefly explain the change.
 
-## Scope
+## What did you test?
 
-- [ ] Selective entitlement behavior
-- [ ] Visibility handling
-- [ ] Compatibility / executable addresses
-- [ ] Documentation only
-- [ ] Build / CI only
+Include the game version/build you used and what you checked in-game.
 
-## Progression safety
+## Unlock mode
 
-If this changes unlock behavior, confirm that it does **not** unintentionally bypass:
+- [ ] `UnlockDLC`
+- [ ] `UnlockAll`
+- [ ] Build / docs only
 
-- [ ] Driver-level requirements
-- [ ] Career / stage progression
-- [ ] Boss / story rewards
-- [ ] Challenge-medal requirements
-- [ ] Multiplayer-objective rewards
-- [ ] Autolog recommendation rewards
-- [ ] Ordinary `GaragePurchaseUnlocker` logic
-- [ ] Time Savers / XP / profile grants
-- [ ] `olp_*` online-pass logic
+## Extra notes
 
-## Testing
-
-Describe the executable version/profile used and the in-game controls checked.
-
-## Notes
-
-Include any new addresses, expected bytes, `OfferId` values or reverse-engineering evidence that should also be documented in `RESEARCH.md`.
+Add any useful addresses, OfferIds, logs or screenshots if the change involved reverse engineering.
