@@ -65,15 +65,18 @@ jobs:
             throw 'Release NFSTR_UltimateUnlocker.asi was not produced.'
           }
 
-          $outName = 'NFSTR_SelectiveUnlocker.asi'
+          $outName = 'NFSTR_UltimateUnlocker.asi'
           $outPath = Join-Path $env:GITHUB_WORKSPACE $outName
-          Copy-Item $asi.FullName $outPath -Force
+
+          if ($asi.FullName -ne $outPath) {
+            Copy-Item $asi.FullName $outPath -Force
+          }
 
           $hash = (Get-FileHash $outPath -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $outName" | Set-Content "$outPath.sha256.txt"
 
           $notes = Get-Content .\RELEASE_NOTES.md -Raw
-          $notes += "`r`n`r`n## SHA-256`r`n`r`n``$hash`` — ``$outName`` `r`n"
+          $notes += "`r`n`r`n## SHA-256`r`n`r`n``$hash`` - ``$outName`` `r`n"
           Set-Content .\release-notes-generated.md $notes
 
           Write-Host "Release asset: $outName"
@@ -86,10 +89,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create $env:TAG `
-            .\NFSTR_SelectiveUnlocker.asi `
-            .\NFSTR_SelectiveUnlocker.asi.sha256.txt `
+            .\NFSTR_UltimateUnlocker.asi `
+            .\NFSTR_UltimateUnlocker.asi.sha256.txt `
+            .\NFSTR_UltimateUnlocker.ini `
             --repo $env:GITHUB_REPOSITORY `
             --target $env:GITHUB_SHA `
-            --title "NFSTR Selective Promo/DLC Unlocker $env:TAG" `
+            --title "NFSTR Ultimate Unlocker $env:TAG" `
             --notes-file .\release-notes-generated.md `
             --latest
