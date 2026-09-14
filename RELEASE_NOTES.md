@@ -1,45 +1,31 @@
-# NFSTR Selective Promo/DLC Unlocker v1.0.0
+# NFSTR Ultimate Unlocker v1.1.0
 
-This is the first production release of the selective unlocker for **Need for Speed: The Run v1.1.0.0**.
+This release adds an INI so the unlocker no longer has to be all-or-nothing.
 
-Unlike the original broad Ultimate Unlocker behavior, this build restores only known discontinued promotional/DLC ownership entitlements and leaves normal progression intact.
-
-## Restored ownership content
-
-- Carbon preorder / Heroes & Villains content
-- Most Wanted preorder / Heroes & Villains content
-- Underground preorder / Heroes & Villains content
-- Heroes & Villains pack
-- Supercar pack
-- Dr Pepper Ford GT content
-- Dr Pepper Chevrolet content
-- Dr Pepper Porsche content
-- Old Spice content
-- AEM content
-
-## Preserved vanilla progression
-
-The release does **not** bypass driver levels, career stages, bosses, challenge medals, multiplayer objectives, Autolog recommendations or ordinary garage-car unlocks.
-
-It also deliberately leaves Time Savers, XP/profile grants, VIP/demo flags and all `olp_*` online-pass entitlements untouched.
-
-## Technical summary
-
-The plugin hooks the game's reflected `OnlineUnlocker` entitlement path, identifies the exact runtime subtype by vtable, matches only known content `OfferId` values and then invokes the game's own successful entitlement grant routine. All non-target entitlements execute the original function through a trampoline.
-
-The hook verifies the expected executable bytes before patching and uses rebased addresses for the validated v1.1 PC executable layout.
-
-## Installation
-
-Place `NFSTR_SelectiveUnlocker.asi` in the game's ASI-loaded plugins/scripts location. Do not load the original `NFSTR_UltimateUnlocker.asi` at the same time.
-
-If using FusionFix, keep its broad unlock settings disabled if you want normal progression:
+## Default setup
 
 ```ini
 [UNLOCKS]
-UnlockAllCars = 0
-UnlockChallenges = 0
-UnlockEverything = 0
+UnlockDLC = 1
+UnlockTimeSavers = 0
+UnlockAll = 0
 ```
 
-See the repository README and `RESEARCH.md` for the full behavior and reverse-engineering history.
+With the defaults, the mod restores the old DLC/preorder/promo entitlements while normal progression still works normally.
+
+## Options
+
+- `UnlockDLC=1` - restores the known discontinued DLC, preorder and promo content.
+- `UnlockTimeSavers=1` - grants the game's `timesavers_pack` entitlement.
+- `UnlockAll=1` - enables the original broad Ultimate Unlocker patches, including the blanket car/challenge/stage unlock behavior.
+
+`UnlockAll` and `UnlockTimeSavers` are separate, so enable both if you want both behaviors.
+
+## Install
+
+Place these files in the folder used by your ASI loader:
+
+- `NFSTR_UltimateUnlocker.asi`
+- `NFSTR_UltimateUnlocker.ini`
+
+The current build is for the DRM-free Need for Speed: The Run v1.1.0.0 PC executable.
