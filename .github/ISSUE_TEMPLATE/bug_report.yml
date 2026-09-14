@@ -1,0 +1,56 @@
+name: Bug report
+description: Report incorrect unlock behavior, a crash, or a compatibility problem
+title: "[Bug] "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please include enough detail to distinguish a selective-unlocker bug from normal game progression or another mod.
+
+  - type: input
+    id: exe
+    attributes:
+      label: Game executable / version
+      description: Include the game version and, if known, the executable SHA-256.
+      placeholder: "v1.1.0.0 / SHA-256 ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Describe the content that was incorrectly locked/unlocked or the failure you observed.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: Explain what should have remained locked or become available.
+    validations:
+      required: true
+
+  - type: textarea
+    id: mods
+    attributes:
+      label: Other installed mods / ASIs
+      description: List FusionFix settings and other ASI plugins if relevant.
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: Provide the shortest sequence that reproduces the issue.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I am not loading the original NFSTR_UltimateUnlocker.asi at the same time.
+          required: true
+        - label: If I use FusionFix, I checked its UnlockAllCars / UnlockChallenges / UnlockEverything settings.
+          required: true

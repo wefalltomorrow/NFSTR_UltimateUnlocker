@@ -1,0 +1,71 @@
+name: Build selective unlocker
+
+on:
+  push:
+    branches:
+      - master
+      - selective-promo-dlc-production
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read version
+        shell: pwsh
+        run: |
+          $version = (Get-Content .\VERSION -Raw).Trim()
+          if (-not $version) {
+            throw 'VERSION is empty.'
+          }
+          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build Release x86
+        shell: pwsh
+        run: |
+          msbuild .\NFSTR_UltimateUnlocker.sln /m /p:Configuration=Release /p:Platform=x86
+
+      - name: Collect ASI
+        shell: pwsh
+        run: |
+          $asi = Get-ChildItem -Path $env:GITHUB_WORKSPACE -Recurse -Filter NFSTR_UltimateUnlocker.asi |
+            Where-Object { $_.FullName -match '[\\/]Release[\\/]' } |
+            Select-Object -First 1
+
+          if (-not $asi) {
+            throw 'Release NFSTR_UltimateUnlocker.asi was not produced.'
+          }
+
+          $outName = 'NFSTR_SelectiveUnlocker.asi'
+          $outPath = Join-Path $env:GITHUB_WORKSPACE $outName
+          Copy-Item $asi.FullName $outPath -Force
+
+          $hash = (Get-FileHash $outPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $outName" | Set-Content "$outPath.sha256.txt"
+
+          "OUT_NAME=$outName" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "Built: $($asi.FullName)"
+          Write-Host "Output: $outName"
+          Write-Host "SHA-256: $hash"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NFSTR-SelectiveUnlocker-v${{ env.VERSION }}
+          path: |
+            ${{ env.OUT_NAME }}
+            ${{ env.OUT_NAME }}.sha256.txt
+          if-no-files-found: error
