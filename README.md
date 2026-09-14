@@ -120,6 +120,10 @@ See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 This standalone ASI is also the reference implementation intended for the broader **Need for Speed: The Run Definitive Edition** project. When that project is complete, the same narrow entitlement logic is expected to be integrated into the DE patch instead of requiring users to install a separate unlocker component.
 
+## Contributing
+
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) before changing unlock logic. Reverse-engineering changes should include executable/version evidence and in-game progression controls so the selective behavior remains verifiable.
+
 ## Credits
 
 - **xan1242 / Lovro Pleše** — original NFSTR Ultimate Unlocker and injector-based implementation this fork is derived from.
