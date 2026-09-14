@@ -1,17 +1,17 @@
 # NFSTR selective promo/DLC unlock research
 
-This document records the reverse-engineering work behind the production selective unlocker and the reasons it differs from the original broad `NFSTR_UltimateUnlocker` behavior.
+This document records the reverse-engineering work behind the `UnlockDLC` mode in this fork and why it behaves differently from the original broad `NFSTR_UltimateUnlocker` patches.
 
 The target used for the final work was the **Need for Speed: The Run v1.1.0.0 PC executable layout**.
 
 ## Final design
 
-The production plugin does two narrowly scoped things:
+With `UnlockDLC=1`, the plugin does two things:
 
 1. Neutralizes the reflected visibility metadata names `IsPromoContent` and `IsHiddenUnlock` so installed promotional/DLC content can appear in the UI.
 2. Hooks the game's `OnlineUnlocker` entitlement method and grants only exact, known discontinued content `OfferId` values through the game's own successful entitlement path.
 
-Everything else remains on vanilla logic.
+Everything else stays on the game's normal logic in DLC-only mode.
 
 The final allow-list is:
 
@@ -28,7 +28,9 @@ os_pack
 aem_adsales
 ```
 
-Explicitly excluded from the selective grant path are ordinary `GaragePurchaseUnlocker` objects, Time Savers, XP/profile entitlements, VIP/demo flags and the `olp_*` online-pass family.
+Ordinary `GaragePurchaseUnlocker` objects, XP/profile entitlements, VIP/demo flags and the `olp_*` online-pass family are not force-granted by `UnlockDLC`.
+
+`UnlockAll=1` is a separate optional mode. It keeps the original Ultimate Unlocker patches and also grants the Time Savers entitlement for users who simply want the whole game unlocked.
 
 ---
 
@@ -45,7 +47,7 @@ injector::MakeNOP(0x834303, 2);
 injector::MakeNOP(0x83434F, 2);
 ```
 
-These remain excluded from this fork. They appear related to legacy online/network-connected handling and were not needed for selective DLC ownership restoration.
+These are not needed for `UnlockDLC`, but they are kept as part of `UnlockAll` so that mode matches the original project as closely as possible.
 
 ### Reflected field-name patches
 
@@ -59,15 +61,15 @@ injector::WriteMemory<uint8_t>(0x25A363D, 0, true); // IsHiddenUnlock
 
 The resulting string mutations are:
 
-| Address | Original field | Result | Production selective build |
-|---|---|---|---|
-| `0x025A35EC` | `Unlockers` | `Unlocker` | **Excluded** |
-| `0x025A362D` | `IsPromoContent` | `IsPromoConten` | **Included** |
-| `0x025A363D` | `IsHiddenUnlock` | `IsHiddenUnloc` | **Included** |
+| Address | Original field | Result | `UnlockDLC` | `UnlockAll` |
+|---|---|---|---|---|
+| `0x025A35EC` | `Unlockers` | `Unlocker` | Excluded | Included |
+| `0x025A362D` | `IsPromoContent` | `IsPromoConten` | Included | Included |
+| `0x025A363D` | `IsHiddenUnlock` | `IsHiddenUnloc` | Included | Included |
 
-Destroying the reflected `Unlockers` property is a broad requirement bypass. FusionFix independently corroborates this idea with its `UnlockEverything` option, which intercepts the same property name. That patch is intentionally not used here.
+Destroying the reflected `Unlockers` property is a broad requirement bypass. FusionFix independently corroborates this idea with its `UnlockEverything` option, which intercepts the same property name. It is not used by the DLC-only mode.
 
-The two visibility fields are kept because they expose installed promotional/hidden entries without themselves satisfying progression requirements.
+The two visibility fields are kept in both modes because they expose installed promotional/hidden entries without themselves satisfying progression requirements.
 
 ### Broad car hooks
 
@@ -94,7 +96,7 @@ Static reflection metadata later established that the actual `Unlockable` layout
 
 Therefore the upstream `+0x18` write sets `IsRunTimeUnlocked`, not the reflected persistent `IsUnlocked` byte.
 
-These hooks are completely excluded from the selective production build.
+These hooks are not used by `UnlockDLC`. They are only enabled by `UnlockAll`.
 
 ### Stage-select patches
 
@@ -105,13 +107,13 @@ injector::MakeNOP(0x930C00, 2);
 injector::MakeNOP(0x9313A2, 2);
 ```
 
-These are broad stage-selection unlocks and are excluded.
+These are broad stage-selection unlocks. They are only enabled by `UnlockAll`.
 
 ### Commented network/Ebisu code
 
 The original repository also contains commented-out network and Ebisu/Autolog patches, including a NOP near `0x00DD76CB` and a group of return-zero stubs around `0x018AEF80`–`0x018AF640`.
 
-They remain excluded. They were not required for the entitlement fix and should be treated as a separate offline-service compatibility research area.
+They remain excluded from both modes. They were not required for the entitlement fix and should be treated as a separate offline-service compatibility research area.
 
 ---
 
@@ -209,7 +211,7 @@ AttemptNumber +0x24
 Challenge +0x20
 ```
 
-These distinct classes are why the final implementation can leave normal progression untouched rather than trying to infer progression from car metadata.
+These distinct classes are why the final implementation can leave normal progression untouched in DLC-only mode rather than trying to infer progression from car metadata.
 
 ---
 
@@ -236,7 +238,7 @@ StageCompletionUnlocker  0x02252BA0
 ChallengeCompletion      0x02252C00
 ```
 
-A critical detail is that `GaragePurchaseUnlocker` derives from / shares the stock entitlement method used by `OnlineUnlocker`. A hook that blindly grants every call to that method therefore also unlocks ordinary garage cars. The production implementation prevents this by requiring the object's vtable to match the exact `OnlineUnlocker` vtable before considering an `OfferId` for the allow-list.
+A critical detail is that `GaragePurchaseUnlocker` derives from / shares the stock entitlement method used by `OnlineUnlocker`. A hook that blindly grants every call to that method therefore also unlocks ordinary garage cars. The DLC-only implementation prevents this by requiring the object's vtable to match the exact `OnlineUnlocker` vtable before considering an `OfferId` for the allow-list.
 
 ---
 
@@ -268,7 +270,7 @@ with the unlock manager located from:
 *(void**)0x02882500 + 0x3CB4
 ```
 
-The production plugin therefore does not manually set car unlock bytes. For allow-listed content it calls the game's own successful grant routine with the original `OnlineUnlocker` object.
+The plugin therefore does not manually set car unlock bytes for DLC ownership. For allow-listed content it calls the game's own successful grant routine with the original `OnlineUnlocker` object.
 
 For all non-target calls, a trampoline executes the original bytes and returns to the stock function so vanilla behavior is preserved.
 
@@ -278,7 +280,7 @@ For all non-target calls, a trampoline executes the original bytes and returns t
 
 Instrumentation in the late test builds exposed the actual runtime offers.
 
-Known content offers selected for the production allow-list:
+Known content offers selected for the DLC allow-list:
 
 ```text
 r_carbon
@@ -293,7 +295,7 @@ os_pack
 aem_adsales
 ```
 
-Other observed online offers deliberately left vanilla included:
+Other observed online offers left on vanilla logic in `UnlockDLC` included:
 
 ```text
 timesavers_pack
@@ -311,6 +313,8 @@ olp_le_free
 olp_purchase
 ```
 
+`timesavers_pack` is additionally granted when `UnlockAll=1`.
+
 The `olp_*` trio behaved as a separate online-pass family. `olp_le_free` was temporarily tested because of its `le` name, then removed; Limited Edition content remained available without it, confirming it was unnecessary for the desired DLC/promo restoration.
 
 Many ordinary cars appeared as `GaragePurchaseUnlocker` offers such as:
@@ -322,7 +326,7 @@ g_for_mus_302_69
 ...
 ```
 
-This provided direct runtime proof that globally granting the shared method would be too broad.
+This provided direct runtime proof that globally granting the shared method would be too broad for DLC-only mode.
 
 ---
 
@@ -346,7 +350,7 @@ Conclusion: that path was not authoritative for the ownership state being invest
 
 Hooked the two original car branches selectively.
 
-Result: no useful runtime execution in the target browsing path. This path was retired.
+Result: no useful runtime execution in the target browsing path. This path was retired for the DLC-only work.
 
 ### Test 6 — grant every call to the shared entitlement method
 
@@ -370,13 +374,13 @@ Result: Limited Edition content remained available and progression remained corr
 
 Conclusion: `olp_le_free` belongs with the online-pass family and is not needed for the selective content restoration.
 
-Test 8 became the basis of the production implementation.
+Test 8 became the basis of the `UnlockDLC` implementation.
 
 ---
 
-## Production safety properties
+## DLC-only safety properties
 
-The production code intentionally includes several guardrails:
+The `UnlockDLC` code intentionally includes several guardrails:
 
 - Rebased addresses are used relative to the executable image base.
 - The target method bytes are verified before patching.
@@ -386,7 +390,9 @@ The production code intentionally includes several guardrails:
 - If the stock unlock manager is unavailable, the hook falls back to original behavior.
 - `GaragePurchaseUnlocker` and all unrelated offers remain vanilla.
 
-The plugin does not use the broad `Unlockers` bypass, car-unlock hooks, stage-select NOPs or Ebisu/Autolog stubs.
+`UnlockDLC` does not use the broad `Unlockers` bypass, car-unlock hooks or stage-select NOPs.
+
+`UnlockAll` is intentionally different: it applies those original broad patches and grants `timesavers_pack` because that mode is explicitly for users who want everything unlocked.
 
 ---
 
@@ -410,4 +416,4 @@ A historical ALI213 release advertised full Limited Edition unlocking, but its e
 
 ## Definitive Edition note
 
-The standalone ASI is intended to remain the reference implementation for this feature. The same narrow logic can later be folded into the broader **Need for Speed: The Run Definitive Edition** patch without carrying over the original Ultimate Unlocker's global progression cheats.
+The standalone ASI remains the reference implementation for this feature. The narrow `UnlockDLC` logic can later be folded into the broader **Need for Speed: The Run Definitive Edition** patch without carrying over the global progression cheats from `UnlockAll`.
