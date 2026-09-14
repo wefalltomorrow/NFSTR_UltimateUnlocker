@@ -1,10 +1,9 @@
-name: Build selective unlocker
+name: Build unlocker
 
 on:
   push:
     branches:
       - master
-      - selective-promo-dlc-production
   pull_request:
     branches:
       - master
@@ -38,7 +37,7 @@ jobs:
         run: |
           msbuild .\NFSTR_UltimateUnlocker.sln /m /p:Configuration=Release /p:Platform=x86
 
-      - name: Collect ASI
+      - name: Collect files
         shell: pwsh
         run: |
           $asi = Get-ChildItem -Path $env:GITHUB_WORKSPACE -Recurse -Filter NFSTR_UltimateUnlocker.asi |
@@ -49,23 +48,26 @@ jobs:
             throw 'Release NFSTR_UltimateUnlocker.asi was not produced.'
           }
 
-          $outName = 'NFSTR_SelectiveUnlocker.asi'
+          $outName = 'NFSTR_UltimateUnlocker.asi'
           $outPath = Join-Path $env:GITHUB_WORKSPACE $outName
-          Copy-Item $asi.FullName $outPath -Force
+
+          if ($asi.FullName -ne $outPath) {
+            Copy-Item $asi.FullName $outPath -Force
+          }
 
           $hash = (Get-FileHash $outPath -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $outName" | Set-Content "$outPath.sha256.txt"
 
           "OUT_NAME=$outName" | Out-File -FilePath $env:GITHUB_ENV -Append
-          Write-Host "Built: $($asi.FullName)"
           Write-Host "Output: $outName"
           Write-Host "SHA-256: $hash"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: NFSTR-SelectiveUnlocker-v${{ env.VERSION }}
+          name: NFSTR-UltimateUnlocker-v${{ env.VERSION }}
           path: |
             ${{ env.OUT_NAME }}
             ${{ env.OUT_NAME }}.sha256.txt
+            NFSTR_UltimateUnlocker.ini
           if-no-files-found: error
